@@ -1126,9 +1126,10 @@ export default function BinanceAutoTrader() {
     if (data15m.length < strategyParams.emaLong) return "none";
 
     // EMA数组的索引：EMA数组长度 = data.length - period + 1
-    // 最后一条数据的EMA索引是 ema.length - 1，对应 data 的最后一条
+    // 使用最短的EMA数组长度作为索引，避免越界
+    const minEmaLength = Math.min(emaShort.length, emaLong.length, volumeMA.length);
+    const emaIndex = minEmaLength - 1;
     const dataIndex = data15m.length - 1;
-    const emaIndex = emaShort.length - 1;
 
     const emaS = emaShort[emaIndex];
     const emaL = emaLong[emaIndex];
@@ -1185,9 +1186,10 @@ export default function BinanceAutoTrader() {
     };
 
     // EMA和RSI数组的索引：EMA数组长度 = data.length - period + 1
-    // 最后一条数据的EMA索引是 ema.length - 1，对应 data 的最后一条
+    // 使用最短的数组长度作为索引，避免越界
+    const minArrayLength = Math.min(emaShort5m.length, emaLong5m.length, rsi5m.length);
     const dataIndex = data5m.length - 1;
-    const emaIndex = emaShort5m.length - 1;
+    const emaIndex = minArrayLength - 1;
 
     const current = data5m[dataIndex];
     const prev = data5m[dataIndex - 1];
@@ -1370,8 +1372,10 @@ export default function BinanceAutoTrader() {
     );
 
     if (trendDirection === "none") {
-      // EMA数组的长度是 data.length - period + 1，最后一条数据的索引是 ema.length - 1
-      const emaIndex = emaShort15m.length - 1;
+      // EMA数组的长度是 data.length - period + 1
+      // 使用最短的EMA数组长度作为索引，避免越界
+      const minEmaLength = Math.min(emaShort15m.length, emaLong15m.length);
+      const emaIndex = minEmaLength - 1;
       const dataIndex = data15m.length - 1;
 
       const emaS = emaShort15m[emaIndex];
