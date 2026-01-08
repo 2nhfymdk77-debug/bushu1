@@ -158,8 +158,6 @@ const DEFAULT_TRADING_CONFIG: TradingConfig = {
 export default function BinanceAutoTrader() {
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
-  const [testnet, setTestnet] = useState(true);
-  const [testMode, setTestMode] = useState(true);
   const [connected, setConnected] = useState(false);
   const [accountBalance, setAccountBalance] = useState<AccountBalance | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
@@ -189,10 +187,8 @@ export default function BinanceAutoTrader() {
   useEffect(() => {
     const savedApiKey = localStorage.getItem("binance_api_key");
     const savedApiSecret = localStorage.getItem("binance_api_secret");
-    const savedTestnet = localStorage.getItem("binance_testnet");
     if (savedApiKey) setApiKey(savedApiKey);
     if (savedApiSecret) setApiSecret(savedApiSecret);
-    if (savedTestnet) setTestnet(savedTestnet === "true");
   }, []);
 
   // 自动扫描所有合约
@@ -561,26 +557,23 @@ export default function BinanceAutoTrader() {
       const totalQuantity = Math.abs(position.positionAmt);
       const closeQuantity = totalQuantity * percent;
 
-      if (!testMode) {
-        // 真实平仓
-        const response = await fetch("/api/binance/order", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            apiKey,
-            apiSecret,
-            testnet,
-            symbol: position.symbol,
-            side,
-            type: "MARKET",
-            quantity: closeQuantity.toFixed(3),
-          }),
-        });
+      // 真实平仓
+      const response = await fetch("/api/binance/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey,
+          apiSecret,
+          symbol: position.symbol,
+          side,
+          type: "MARKET",
+          quantity: closeQuantity.toFixed(3),
+        }),
+      });
 
-        const result = await response.json();
-        if (!response.ok) {
-          throw new Error(result.error || "平仓失败");
-        }
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "平仓失败");
       }
 
       // 记录平仓交易
@@ -652,26 +645,23 @@ export default function BinanceAutoTrader() {
       const side = isLong ? "SELL" : "BUY";
       const quantity = Math.abs(position.positionAmt);
 
-      if (!testMode) {
-        // 真实平仓
-        const response = await fetch("/api/binance/order", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            apiKey,
-            apiSecret,
-            testnet,
-            symbol: position.symbol,
-            side,
-            type: "MARKET",
-            quantity: quantity.toFixed(3),
-          }),
-        });
+      // 真实平仓
+      const response = await fetch("/api/binance/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey,
+          apiSecret,
+          symbol: position.symbol,
+          side,
+          type: "MARKET",
+          quantity: quantity.toFixed(3),
+        }),
+      });
 
-        const result = await response.json();
-        if (!response.ok) {
-          throw new Error(result.error || "平仓失败");
-        }
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "平仓失败");
       }
 
       // 记录平仓交易
@@ -718,7 +708,6 @@ export default function BinanceAutoTrader() {
   const saveConfig = () => {
     localStorage.setItem("binance_api_key", apiKey);
     localStorage.setItem("binance_api_secret", apiSecret);
-    localStorage.setItem("binance_testnet", String(testnet));
   };
 
   // 连接币安API
@@ -759,7 +748,7 @@ export default function BinanceAutoTrader() {
         const balanceResponse = await fetch("/api/binance/balance", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ apiKey, apiSecret, testnet }),
+          body: JSON.stringify({ apiKey, apiSecret }),
         });
 
         if (balanceResponse.ok) {
@@ -810,7 +799,7 @@ export default function BinanceAutoTrader() {
       const balanceResponse = await fetch("/api/binance/balance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey, apiSecret, testnet }),
+        body: JSON.stringify({ apiKey, apiSecret }),
       });
 
       if (balanceResponse.ok) {
@@ -827,7 +816,7 @@ export default function BinanceAutoTrader() {
       const positionsResponse = await fetch("/api/binance/positions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey, apiSecret, testnet }),
+        body: JSON.stringify({ apiKey, apiSecret }),
       });
 
       if (positionsResponse.ok) {
@@ -858,7 +847,7 @@ export default function BinanceAutoTrader() {
       const ordersResponse = await fetch("/api/binance/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey, apiSecret, testnet, limit: 50 }),
+        body: JSON.stringify({ apiKey, apiSecret, limit: 50 }),
       });
 
       if (ordersResponse.ok) {
@@ -1184,39 +1173,30 @@ export default function BinanceAutoTrader() {
         ? signal.entryPrice * (1 + tradingConfig.takeProfitPercent / 100)
         : signal.entryPrice * (1 - tradingConfig.takeProfitPercent / 100);
 
-      let orderId = undefined;
-      let orderStatus: "FILLED" | "PARTIALLY_FILLED" | "PENDING" | "FAILED" = "PENDING";
+      // 真实下单
+      const response = await fetch("/api/binance/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey,
+          apiSecret,
+          symbol: signal.symbol,
+          side,
+          type,
+          quantity: quantity.toFixed(3),
+          stopLoss: stopLossPrice.toFixed(2),
+          takeProfit: takeProfitPrice.toFixed(2),
+        }),
+      });
 
-      if (!testMode) {
-        // 真实下单
-        const response = await fetch("/api/binance/order", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            apiKey,
-            apiSecret,
-            testnet,
-            symbol: signal.symbol,
-            side,
-            type,
-            quantity: quantity.toFixed(3),
-            stopLoss: stopLossPrice.toFixed(2),
-            takeProfit: takeProfitPrice.toFixed(2),
-          }),
-        });
-
-        const result = await response.json();
-        if (response.ok) {
-          orderId = result.orderId;
-          orderStatus = result.status === "FILLED" ? "FILLED" : "PENDING";
-        } else {
-          orderStatus = "FAILED";
-          throw new Error(result.error || "下单失败");
-        }
-      } else {
-        // 测试模式，模拟成交
-        orderStatus = "FILLED";
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "下单失败");
       }
+
+      const orderId = result.orderId;
+      const orderStatus: "FILLED" | "PARTIALLY_FILLED" | "PENDING" | "FAILED" =
+        result.status === "FILLED" ? "FILLED" : "PENDING";
 
       const trade: TradeRecord = {
         id: Date.now().toString(),
@@ -1445,28 +1425,6 @@ export default function BinanceAutoTrader() {
           </div>
         </div>
 
-        <div className="flex items-center gap-4 mt-4">
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={testnet}
-              onChange={(e) => setTestnet(e.target.checked)}
-              className="w-4 h-4"
-            />
-            <span className="text-gray-300">测试网</span>
-          </label>
-
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={testMode}
-              onChange={(e) => setTestMode(e.target.checked)}
-              className="w-4 h-4"
-            />
-            <span className="text-gray-300">模拟交易（不真实下单）</span>
-          </label>
-        </div>
-
         {error && (
           <div className="bg-red-500/20 text-red-400 px-4 py-2 rounded mt-4">
             {error}
@@ -1484,7 +1442,7 @@ export default function BinanceAutoTrader() {
         {connected && (
           <div className="flex items-center gap-2 text-green-500 mt-4">
             <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-            <span>已连接{testnet ? "测试网" : "主网"}</span>
+            <span>已连接币安主网</span>
           </div>
         )}
       </div>
@@ -2092,7 +2050,7 @@ export default function BinanceAutoTrader() {
             <div>
               <h2 className="text-xl font-bold mb-2">交易控制</h2>
               <div className="text-sm text-gray-400">
-                监控 {selectedSymbols.length} 个合约 | {testMode ? "模拟交易" : "实盘交易"} | {testnet ? "测试网" : "主网"}
+                监控 {selectedSymbols.length} 个合约 | 实盘交易 | 币安主网
               </div>
             </div>
             <div className="flex items-center gap-4">
@@ -2113,9 +2071,9 @@ export default function BinanceAutoTrader() {
                     type="checkbox"
                     checked={autoTrading}
                     onChange={(e) => {
-                      if (!testMode && e.target.checked) {
+                      if (e.target.checked) {
                         const confirm = window.confirm(
-                          "⚠️ 警告：您即将在非测试模式下开启自动交易！\n\n这会使用真实资金进行交易。\n\n确定要继续吗？"
+                          "⚠️ 警告：您即将开启自动交易！\n\n这会使用真实资金进行交易。\n\n确定要继续吗？"
                         );
                         if (!confirm) return;
                       }

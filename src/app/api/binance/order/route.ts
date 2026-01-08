@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 
 const BASE_URL = "https://fapi.binance.com";
-const TESTNET_URL = "https://testnet.binancefuture.com";
 
 function createSignature(queryString: string, apiSecret: string): string {
   return crypto
@@ -16,7 +15,6 @@ export async function POST(request: NextRequest) {
     const {
       apiKey,
       apiSecret,
-      testnet = false,
       symbol,
       side,
       type,
@@ -33,7 +31,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const baseUrl = testnet ? TESTNET_URL : BASE_URL;
     const timestamp = Date.now();
 
     // 构建查询参数
@@ -66,7 +63,7 @@ export async function POST(request: NextRequest) {
     const signature = createSignature(queryString, apiSecret);
 
     const response = await fetch(
-      `${baseUrl}/fapi/v1/order?${queryString}&signature=${signature}`,
+      `${BASE_URL}/fapi/v1/order?${queryString}&signature=${signature}`,
       {
         method: "POST",
         headers: {

@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 
 const BASE_URL = "https://fapi.binance.com";
-const TESTNET_URL = "https://testnet.binancefuture.com";
 
 function createSignature(queryString: string, apiSecret: string): string {
   return crypto
@@ -13,9 +12,9 @@ function createSignature(queryString: string, apiSecret: string): string {
 
 export async function POST(request: NextRequest) {
   try {
-    const { apiKey, apiSecret, testnet = false } = await request.json();
+    const { apiKey, apiSecret } = await request.json();
 
-    console.log('[Positions API] Request received', { apiKey: apiKey ? '***' : 'missing', apiSecret: apiSecret ? '***' : 'missing', testnet });
+    console.log('[Positions API] Request received', { apiKey: apiKey ? '***' : 'missing', apiSecret: apiSecret ? '***' : 'missing' });
 
     if (!apiKey || !apiSecret) {
       console.error('[Positions API] Missing credentials');
@@ -25,15 +24,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const baseUrl = testnet ? TESTNET_URL : BASE_URL;
     const timestamp = Date.now();
     const queryString = `timestamp=${timestamp}`;
     const signature = createSignature(queryString, apiSecret);
 
-    console.log('[Positions API] Fetching from', baseUrl);
+    console.log('[Positions API] Fetching from', BASE_URL);
 
     const response = await fetch(
-      `${baseUrl}/fapi/v2/positionRisk?${queryString}&signature=${signature}`,
+      `${BASE_URL}/fapi/v2/positionRisk?${queryString}&signature=${signature}`,
       {
         headers: {
           "X-MBX-APIKEY": apiKey,
