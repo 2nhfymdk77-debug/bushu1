@@ -23,6 +23,15 @@ interface StrategyParams {
   leverage: number;
   riskPercent: number;
   minTrendDistance: number;
+  // 筛选条件开关和阈值
+  enableTrendDistanceFilter: boolean;
+  enableRSIFilter: boolean;
+  minRSI: number;
+  maxRSI: number;
+  enablePriceEMAFilter: boolean;
+  enableTouchedEmaFilter: boolean;
+  enableCandleColorFilter: boolean;
+  minCandleChangePercent: number;
 }
 
 const DEFAULT_PARAMS: StrategyParams = {
@@ -36,6 +45,15 @@ const DEFAULT_PARAMS: StrategyParams = {
   leverage: 3,
   riskPercent: 2,
   minTrendDistance: 0.05, // 降低最小趋势距离（0.15% -> 0.05%）
+  // 筛选条件开关和阈值（默认全部开启）
+  enableTrendDistanceFilter: true,
+  enableRSIFilter: true,
+  minRSI: 30,
+  maxRSI: 70,
+  enablePriceEMAFilter: true,
+  enableTouchedEmaFilter: true,
+  enableCandleColorFilter: true,
+  minCandleChangePercent: 0.1,
 };
 
 interface FuturesSymbol {
@@ -320,12 +338,13 @@ export default function BinanceAutoTrader() {
           if (klines15m.length >= strategyParams.emaLong + 10 &&
               klines5m.length >= strategyParams.emaLong + 10) {
             addLog(`  🔎 ${symbol} 开始信号检测...`);
-            const { signal, reason } = checkSignals(symbol, klines15m, klines5m);
+            const { signal, reason, details } = checkSignals(symbol, klines15m, klines5m);
 
             if (signal) {
               signalsFound++;
               addLog(`  🎯 ${symbol} 发现${signal.direction === 'long' ? '多头' : '空头'}信号! 价格: ${signal.entryPrice}`);
               addLog(`  📋 信号原因: ${signal.reason}`);
+              addLog(`  📝 详细信息: ${details}`);
 
               // 检查是否可以执行交易
               let canExecute = autoTrading;
@@ -362,9 +381,13 @@ export default function BinanceAutoTrader() {
               // 执行交易（仅在未达到限制时）
               if (canExecute) {
                 addLog(`  📝 ${symbol} 执行交易...`);
-                await executeTrade(signal);
-                tradesExecuted++;
-                addLog(`  ✅ ${symbol} 交易执行完成`);
+                try {
+                  await executeTrade(signal);
+                  tradesExecuted++;
+                  addLog(`  ✅ ${symbol} 交易执行完成`);
+                } catch (err: any) {
+                  addLog(`  ❌ ${symbol} 交易执行失败: ${err.message}`);
+                }
               } else {
                 addLog(`  ⏭️ ${symbol} 跳过交易: ${notExecutedReason}`);
               }
@@ -372,6 +395,7 @@ export default function BinanceAutoTrader() {
               // 显示更详细的未触发原因
               addLog(`  ✖️ ${symbol} 无信号`);
               addLog(`  📊 检测结果: ${reason}`);
+              addLog(`  📝 详细原因: ${details}`);
             }
           } else {
             addLog(`  ⚠️ ${symbol} K线数据不足 (需要 ${strategyParams.emaLong + 10} 条)`);
@@ -1071,15 +1095,20 @@ export default function BinanceAutoTrader() {
     return "none";
   };
 
-  // 5分钟进场逻辑（优化版：更简单的条件）
+  // 5分钟进场逻辑（优化版：更简单的条件，支持配置开关）
   const checkEntrySignal = (
     data5m: KLineData[],
     trendDirection: "long" | "short",
     emaShort5m: number[],
     emaLong5m: number[],
     rsi5m: number[]
-  ): { signal: boolean; type: "long" | "short"; reason: string } => {
-    if (data5m.length < strategyParams.emaLong + 10) return { signal: false, type: trendDirection, reason: "数据不足" };
+  ): { signal: boolean; type: "long" | "short"; reason: string; details: string } => {
+    if (data5m.length < strategyParams.emaLong + 10) return {
+      signal: false,
+      type: trendDirection,
+      reason: "数据不足",
+      details: `需要${strategyParams.emaLong + 10}条K线，实际只有${data5m.length}条`
+    };
 
     const index = data5m.length - 1;
     const current = data5m[index];
@@ -1092,54 +1121,131 @@ export default function BinanceAutoTrader() {
 
     console.log(`[5分钟进场] 趋势: ${trendDirection}, 价格: ${current.close.toFixed(2)}, EMA20: ${emaS.toFixed(2)}, EMA60: ${emaL.toFixed(2)}, RSI: ${rsi.toFixed(1)}`);
 
+    const failedChecks: string[] = [];
+
     if (trendDirection === "long") {
       // 优化后的做多条件：价格在EMA20上方且满足以下任一条件
       const priceAboveEMA = current.close > emaS;
+      if (strategyParams.enablePriceEMAFilter && !priceAboveEMA) {
+        failedChecks.push(`价格${current.close.toFixed(2)}不在EMA20(${emaS.toFixed(2)})上方`);
+      }
 
       // 条件1：RSI从超卖区反弹（RSI < 50 且 RSI上升）
       const rsiRecovery = rsi < 50 && rsi > rsiPrev;
+      if (strategyParams.enableRSIFilter && !rsiRecovery) {
+        if (rsi >= 50) {
+          failedChecks.push(`RSI=${rsi.toFixed(1)}不在超卖区(需要<50)`);
+        } else if (rsi <= rsiPrev) {
+          failedChecks.push(`RSI未反弹(${rsi.toFixed(1)} <= ${rsiPrev.toFixed(1)})`);
+        }
+      }
 
       // 条件2：最近3根K线有回踩（价格曾触及EMA20）
       const touchedEma = prev.low <= emaS || prev2.low <= emaS;
+      if (strategyParams.enableTouchedEmaFilter && !touchedEma) {
+        failedChecks.push(`最近3根K线未触及EMA20(${prev2.low.toFixed(2)}, ${prev.low.toFixed(2)} > ${emaS.toFixed(2)})`);
+      }
 
       // 条件3：阳线确认（当前K线收阳且涨幅 > 0.1%）
+      const candleChange = (current.close - current.open) / current.open * 100;
       const bullishCandle = current.close > current.open &&
-                           (current.close - current.open) / current.open > 0.001;
+                           candleChange >= strategyParams.minCandleChangePercent;
+      if (strategyParams.enableCandleColorFilter && !bullishCandle) {
+        if (current.close <= current.open) {
+          failedChecks.push(`当前不是阳线(${current.close.toFixed(2)} <= ${current.open.toFixed(2)})`);
+        } else {
+          failedChecks.push(`阳线涨幅${candleChange.toFixed(3)}%不足${strategyParams.minCandleChangePercent}%`);
+        }
+      }
 
-      console.log(`[5分钟进场 多头] 价格>EMA: ${priceAboveEMA}, RSI反弹: ${rsiRecovery}, 回踩: ${touchedEma}, 阳线: ${bullishCandle}`);
+      console.log(`[5分钟进场 多头] 价格>EMA: ${priceAboveEMA}, RSI反弹: ${rsiRecovery}, 回踩: ${touchedEma}, 阳线: ${bullishCandle}, 失败检查: [${failedChecks.join(', ')}]`);
 
       // 只需要满足任意2个条件即可
-      const conditions = [priceAboveEMA, rsiRecovery, touchedEma, bullishCandle].filter(Boolean).length;
-      if (conditions >= 2) {
-        console.log(`[5分钟进场] ✅ 多头信号触发 (${conditions}/4条件)`);
-        return { signal: true, type: "long", reason: "多头进场（满足2+条件）" };
+      let passedConditions = 0;
+      if (!strategyParams.enablePriceEMAFilter || priceAboveEMA) passedConditions++;
+      if (!strategyParams.enableRSIFilter || rsiRecovery) passedConditions++;
+      if (!strategyParams.enableTouchedEmaFilter || touchedEma) passedConditions++;
+      if (!strategyParams.enableCandleColorFilter || bullishCandle) passedConditions++;
+
+      if (passedConditions >= 2) {
+        console.log(`[5分钟进场] ✅ 多头信号触发 (${passedConditions}/4条件)`);
+        return {
+          signal: true,
+          type: "long",
+          reason: `多头进场（${passedConditions}/4条件满足）`,
+          details: `价格:${current.close.toFixed(2)}, RSI:${rsi.toFixed(1)}, EMA20:${emaS.toFixed(2)}`
+        };
+      } else {
+        console.log(`[5分钟进场] ❌ 多头未触发 (${passedConditions}/4条件)`);
+        return {
+          signal: false,
+          type: trendDirection,
+          reason: `多头进场未通过 (${passedConditions}/4条件)`,
+          details: `未满足条件: ${failedChecks.length > 0 ? failedChecks.join('; ') : '满足条件不足2个'}`
+        };
       }
     } else {
       // 优化后的做空条件：价格在EMA20下方且满足以下任一条件
       const priceBelowEMA = current.close < emaS;
+      if (strategyParams.enablePriceEMAFilter && !priceBelowEMA) {
+        failedChecks.push(`价格${current.close.toFixed(2)}不在EMA20(${emaS.toFixed(2)})下方`);
+      }
 
       // 条件1：RSI从超买区回落（RSI > 50 且 RSI下降）
       const rsiDecline = rsi > 50 && rsi < rsiPrev;
+      if (strategyParams.enableRSIFilter && !rsiDecline) {
+        if (rsi <= 50) {
+          failedChecks.push(`RSI=${rsi.toFixed(1)}不在超买区(需要>50)`);
+        } else if (rsi >= rsiPrev) {
+          failedChecks.push(`RSI未回落(${rsi.toFixed(1)} >= ${rsiPrev.toFixed(1)})`);
+        }
+      }
 
       // 条件2：最近3根K线有反弹（价格曾触及EMA20）
       const touchedEma = prev.high >= emaS || prev2.high >= emaS;
+      if (strategyParams.enableTouchedEmaFilter && !touchedEma) {
+        failedChecks.push(`最近3根K线未触及EMA20(${prev2.high.toFixed(2)}, ${prev.high.toFixed(2)} < ${emaS.toFixed(2)})`);
+      }
 
       // 条件3：阴线确认（当前K线收阴且跌幅 > 0.1%）
+      const candleChange = (current.open - current.close) / current.open * 100;
       const bearishCandle = current.close < current.open &&
-                           (current.open - current.close) / current.open > 0.001;
+                           candleChange >= strategyParams.minCandleChangePercent;
+      if (strategyParams.enableCandleColorFilter && !bearishCandle) {
+        if (current.close >= current.open) {
+          failedChecks.push(`当前不是阴线(${current.close.toFixed(2)} >= ${current.open.toFixed(2)})`);
+        } else {
+          failedChecks.push(`阴线跌幅${candleChange.toFixed(3)}%不足${strategyParams.minCandleChangePercent}%`);
+        }
+      }
 
-      console.log(`[5分钟进场 空头] 价格<EMA: ${priceBelowEMA}, RSI回落: ${rsiDecline}, 反弹: ${touchedEma}, 阴线: ${bearishCandle}`);
+      console.log(`[5分钟进场 空头] 价格<EMA: ${priceBelowEMA}, RSI回落: ${rsiDecline}, 反弹: ${touchedEma}, 阴线: ${bearishCandle}, 失败检查: [${failedChecks.join(', ')}]`);
 
       // 只需要满足任意2个条件即可
-      const conditions = [priceBelowEMA, rsiDecline, touchedEma, bearishCandle].filter(Boolean).length;
-      if (conditions >= 2) {
-        console.log(`[5分钟进场] ✅ 空头信号触发 (${conditions}/4条件)`);
-        return { signal: true, type: "short", reason: "空头进场（满足2+条件）" };
+      let passedConditions = 0;
+      if (!strategyParams.enablePriceEMAFilter || priceBelowEMA) passedConditions++;
+      if (!strategyParams.enableRSIFilter || rsiDecline) passedConditions++;
+      if (!strategyParams.enableTouchedEmaFilter || touchedEma) passedConditions++;
+      if (!strategyParams.enableCandleColorFilter || bearishCandle) passedConditions++;
+
+      if (passedConditions >= 2) {
+        console.log(`[5分钟进场] ✅ 空头信号触发 (${passedConditions}/4条件)`);
+        return {
+          signal: true,
+          type: "short",
+          reason: `空头进场（${passedConditions}/4条件满足）`,
+          details: `价格:${current.close.toFixed(2)}, RSI:${rsi.toFixed(1)}, EMA20:${emaS.toFixed(2)}`
+        };
+      } else {
+        console.log(`[5分钟进场] ❌ 空头未触发 (${passedConditions}/4条件)`);
+        return {
+          signal: false,
+          type: trendDirection,
+          reason: `空头进场未通过 (${passedConditions}/4条件)`,
+          details: `未满足条件: ${failedChecks.length > 0 ? failedChecks.join('; ') : '满足条件不足2个'}`
+        };
       }
     }
-
-    console.log(`[5分钟进场] ❌ 未触发进场信号`);
-    return { signal: false, type: trendDirection, reason: "条件不满足" };
   };
 
   // 检测交易信号（多时间框架：15分钟趋势 + 5分钟回调进场）
@@ -1147,10 +1253,14 @@ export default function BinanceAutoTrader() {
     symbol: string,
     data15m: KLineData[],
     data5m: KLineData[]
-  ): { signal: Signal | null; reason: string } => {
+  ): { signal: Signal | null; reason: string; details: string } => {
     // 检查数据量
     if (data15m.length < strategyParams.emaLong + 10 || data5m.length < strategyParams.emaLong + 10) {
-      return { signal: null, reason: `数据不足 (15m:${data15m.length}, 5m:${data5m.length}, 需要:${strategyParams.emaLong + 10})` };
+      return {
+        signal: null,
+        reason: `数据不足`,
+        details: `15m:${data15m.length}条, 5m:${data5m.length}条, 需要${strategyParams.emaLong + 10}条`
+      };
     }
 
     // 步骤1: 15分钟趋势过滤
@@ -1173,7 +1283,8 @@ export default function BinanceAutoTrader() {
       const distance = Math.abs(emaS - emaL) / emaL * 100;
       return {
         signal: null,
-        reason: `趋势不明确 (EMA${strategyParams.emaShort}:${emaS.toFixed(2)}, EMA${strategyParams.emaLong}:${emaL.toFixed(2)}, 距离:${distance.toFixed(2)}%, 需要:${strategyParams.minTrendDistance}%)`
+        reason: `趋势不明确`,
+        details: `EMA${strategyParams.emaShort}:${emaS.toFixed(2)}, EMA${strategyParams.emaLong}:${emaL.toFixed(2)}, 价格:${close.toFixed(2)}, 距离:${distance.toFixed(2)}% < ${strategyParams.minTrendDistance}%`
       };
     }
 
@@ -1182,7 +1293,7 @@ export default function BinanceAutoTrader() {
     const emaLong5m = calculateEMA(data5m, strategyParams.emaLong);
     const rsi5m = calculateRSI(data5m, strategyParams.rsiPeriod);
 
-    const { signal, type, reason: entryReason } = checkEntrySignal(
+    const { signal, type, reason: entryReason, details: entryDetails } = checkEntrySignal(
       data5m,
       trendDirection,
       emaShort5m,
@@ -1193,16 +1304,17 @@ export default function BinanceAutoTrader() {
     if (!signal) {
       const index = data5m.length - 1;
       const rsi = rsi5m[index];
-      console.log(`[信号检测] ❌ ${symbol} 5分钟进场未通过: ${entryReason}`);
+      console.log(`[信号检测] ❌ ${symbol} 5分钟进场未通过: ${entryReason} - ${entryDetails}`);
       return {
         signal: null,
-        reason: `未触发进场 (趋势:${trendDirection}, ${entryReason}, RSI:${rsi.toFixed(1)})`
+        reason: `${trendDirection === 'long' ? '多头' : '空头'}趋势，但进场条件不满足`,
+        details: `${entryReason}; ${entryDetails}`
       };
     }
 
     const current5m = data5m[data5m.length - 1];
     const signalReason = `15分钟${trendDirection === "long" ? "多头" : "空头"}趋势 + 5分钟回调进场 (${entryReason})`;
-    console.log(`[信号检测] ✅ ${symbol} 信号触发: ${signalReason}`);
+    console.log(`[信号检测] ✅ ${symbol} 信号触发: ${signalReason} - ${entryDetails}`);
     return {
       signal: {
         symbol,
@@ -1212,7 +1324,8 @@ export default function BinanceAutoTrader() {
         confidence: 0.85,
         entryPrice: current5m.close,
       },
-      reason: "信号触发"
+      reason: "信号触发",
+      details: entryDetails
     };
   };
 
@@ -1249,11 +1362,19 @@ export default function BinanceAutoTrader() {
 
   // 执行交易
   const executeTrade = async (signal: Signal) => {
-    if (!autoTrading || !connected || !accountBalance) return;
+    if (!autoTrading || !connected) {
+      addSystemLog(`交易跳过: 自动交易=${autoTrading}, 已连接=${connected}`, 'warning');
+      return;
+    }
+
+    if (!accountBalance) {
+      addSystemLog(`交易跳过: 账户余额未获取`, 'warning');
+      return;
+    }
 
     // 检查每日交易限制
     if (dailyTradesCount >= tradingConfig.dailyTradesLimit) {
-      console.log("已达到每日交易限制");
+      addSystemLog(`交易跳过: 已达到每日交易限制 (${dailyTradesCount}/${tradingConfig.dailyTradesLimit})`, 'warning');
       return;
     }
 
@@ -2069,6 +2190,105 @@ export default function BinanceAutoTrader() {
                   className="w-full bg-gray-700 rounded px-3 py-2 text-white"
                 />
               </div>
+            </div>
+          </div>
+
+          <div className="mt-6 pt-6 border-t border-gray-700">
+            <h3 className="text-lg font-bold mb-4">5分钟进场筛选条件</h3>
+            <div className="bg-gray-700 rounded-lg p-4 mb-4">
+              <div className="text-sm text-gray-300 mb-2">
+                说明：进场需要满足 <strong className="text-blue-400">至少 2/4 个条件</strong>。关闭某个条件后，该条件将自动视为已满足。
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={strategyParams.enablePriceEMAFilter}
+                    onChange={(e) =>
+                      setStrategyParams({ ...strategyParams, enablePriceEMAFilter: e.target.checked })
+                    }
+                    className="w-4 h-4"
+                  />
+                  <span className="text-sm text-gray-300">价格与EMA关系</span>
+                </label>
+                <div className="text-xs text-gray-500 mt-1 ml-6">
+                  多头: 价格 {'>'} EMA20 | 空头: 价格 {'<'} EMA20
+                </div>
+              </div>
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={strategyParams.enableRSIFilter}
+                    onChange={(e) =>
+                      setStrategyParams({ ...strategyParams, enableRSIFilter: e.target.checked })
+                    }
+                    className="w-4 h-4"
+                  />
+                  <span className="text-sm text-gray-300">RSI超买超卖检测</span>
+                </label>
+                <div className="text-xs text-gray-500 mt-1 ml-6">
+                  多头: RSI {'<'} 50 且上升 | 空头: RSI {'>'} 50 且下降
+                </div>
+              </div>
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={strategyParams.enableTouchedEmaFilter}
+                    onChange={(e) =>
+                      setStrategyParams({ ...strategyParams, enableTouchedEmaFilter: e.target.checked })
+                    }
+                    className="w-4 h-4"
+                  />
+                  <span className="text-sm text-gray-300">EMA回踩/反弹检测</span>
+                </label>
+                <div className="text-xs text-gray-500 mt-1 ml-6">
+                  多头: 最近3根触及EMA20下方 | 空头: 最近3根触及EMA20上方
+                </div>
+              </div>
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={strategyParams.enableCandleColorFilter}
+                    onChange={(e) =>
+                      setStrategyParams({ ...strategyParams, enableCandleColorFilter: e.target.checked })
+                    }
+                    className="w-4 h-4"
+                  />
+                  <span className="text-sm text-gray-300">K线颜色确认</span>
+                </label>
+                <div className="text-xs text-gray-500 mt-1 ml-6 flex items-center gap-2">
+                  <span>多头: 阳线 | 空头: 阴线</span>
+                  <span className="text-gray-400">|</span>
+                  <span>最小涨跌幅: </span>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    value={strategyParams.minCandleChangePercent}
+                    onChange={(e) =>
+                      setStrategyParams({ ...strategyParams, minCandleChangePercent: Math.max(0, Number(e.target.value)) })
+                    }
+                    className="w-16 bg-gray-600 rounded px-2 py-1 text-xs text-white"
+                  />
+                  <span>%</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 p-4 bg-blue-900/20 rounded">
+              <h4 className="font-bold text-blue-400 mb-2">筛选条件说明</h4>
+              <ul className="text-xs text-gray-300 space-y-1 list-disc list-inside">
+                <li>进场逻辑采用"满足N个条件"机制，而不是"全部满足"</li>
+                <li>关闭某个条件后，该条件不再作为筛选标准，相当于自动通过</li>
+                <li>建议至少开启2-3个条件，以保证信号质量</li>
+                <li>降低最小涨跌幅阈值可提高触发频率，但可能增加假信号</li>
+                <li>扫描日志会详细列出每个合约未满足的具体条件</li>
+              </ul>
             </div>
           </div>
 
