@@ -154,6 +154,26 @@ export default function BinanceAutoTrader() {
     if (savedTestnet) setTestnet(savedTestnet === "true");
   }, []);
 
+  // 每日重置交易计数
+  useEffect(() => {
+    const resetDailyTrades = () => {
+      const now = new Date();
+      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      const tomorrowMidnight = new Date(midnight.getTime() + 24 * 60 * 60 * 1000);
+      const timeUntilReset = tomorrowMidnight.getTime() - now.getTime();
+
+      const resetTimeout = setTimeout(() => {
+        setDailyTradesCount(0);
+        resetDailyTrades();
+      }, timeUntilReset);
+
+      return () => clearTimeout(resetTimeout);
+    };
+
+    const cleanup = resetDailyTrades();
+    return cleanup;
+  }, []);
+
   // 保存配置到localStorage
   const saveConfig = () => {
     localStorage.setItem("binance_api_key", apiKey);
