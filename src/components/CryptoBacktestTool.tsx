@@ -35,6 +35,8 @@ interface BacktestResult {
   totalProfit: number;
   totalLoss: number;
   netProfit: number;
+  totalReturnRate: number;  // 总收益率（%）
+  annualizedReturn: number; // 年化收益率（%）
   avgWin: number;
   avgLoss: number;
   profitFactor: number;
@@ -421,10 +423,10 @@ export default function CryptoBacktestTool() {
         // 统计结果
         const winningTrades = trades.filter(t => t.pnl > 0);
         const losingTrades = trades.filter(t => t.pnl <= 0);
-        
+
         const totalProfit = winningTrades.reduce((sum, t) => sum + t.pnl, 0);
         const totalLoss = Math.abs(losingTrades.reduce((sum, t) => sum + t.pnl, 0));
-        
+
         let maxDrawdown = 0;
         let peak = 0;
         let cumulative = 0;
@@ -433,11 +435,30 @@ export default function CryptoBacktestTool() {
           peak = Math.max(peak, cumulative);
           maxDrawdown = Math.max(maxDrawdown, peak - cumulative);
         });
-        
+
+        // 计算总收益率（净收益的绝对值）
+        const totalReturnRate = cumulative;
+
+        // 计算年化收益率
+        // 假设初始资金为1，计算年化收益
+        // 年化收益率 = ((1 + totalReturnRate/100) ^ (365 / tradingDays) - 1) * 100
+        // tradingDays = (lastExitTime - firstEntryTime) / (1000 * 60 * 60 * 24)
+        let annualizedReturn = 0;
+        if (trades.length > 0) {
+          const firstEntryTime = trades[0].entryTime;
+          const lastExitTime = trades[trades.length - 1].exitTime;
+          const tradingDays = (lastExitTime - firstEntryTime) / (1000 * 60 * 60 * 24);
+          if (tradingDays > 0) {
+            const years = tradingDays / 365;
+            const finalValue = 1 + totalReturnRate / 100;
+            annualizedReturn = (Math.pow(finalValue, 1 / years) - 1) * 100;
+          }
+        }
+
         // 保存EMA数据用于图表展示
         setEmaShort15m(emaShort15m);
         setEmaLong15m(emaLong15m);
-        
+
         setResult({
           totalTrades: trades.length,
           winningTrades: winningTrades.length,
@@ -446,6 +467,8 @@ export default function CryptoBacktestTool() {
           totalProfit,
           totalLoss,
           netProfit: totalProfit - totalLoss,
+          totalReturnRate,
+          annualizedReturn,
           avgWin: winningTrades.length > 0 ? totalProfit / winningTrades.length : 0,
           avgLoss: losingTrades.length > 0 ? totalLoss / losingTrades.length : 0,
           profitFactor: totalLoss > 0 ? totalProfit / totalLoss : totalProfit > 0 ? Infinity : 0,
@@ -610,15 +633,15 @@ export default function CryptoBacktestTool() {
                 </p>
               </div>
               <div className="bg-gray-800 rounded-lg p-4">
-                <p className="text-sm text-gray-400">净利润</p>
-                <p className={`text-2xl font-bold ${result.netProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
-                  {formatNumber(result.netProfit)}%
+                <p className="text-sm text-gray-400">总收益率</p>
+                <p className={`text-2xl font-bold ${result.totalReturnRate >= 0 ? "text-green-500" : "text-red-500"}`}>
+                  {formatNumber(result.totalReturnRate)}%
                 </p>
               </div>
               <div className="bg-gray-800 rounded-lg p-4">
-                <p className="text-sm text-gray-400">盈亏比</p>
-                <p className="text-2xl font-bold">
-                  {result.profitFactor === Infinity ? "∞" : formatNumber(result.profitFactor)}
+                <p className="text-sm text-gray-400">年化收益率</p>
+                <p className={`text-2xl font-bold ${result.annualizedReturn >= 0 ? "text-green-500" : "text-red-500"}`}>
+                  {formatNumber(result.annualizedReturn)}%
                 </p>
               </div>
             </div>
@@ -656,7 +679,7 @@ export default function CryptoBacktestTool() {
             {/* 详细统计 */}
             <div className="bg-gray-800 rounded-lg p-6">
               <h3 className="text-lg font-bold mb-4">详细统计</h3>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div>
                   <p className="text-sm text-gray-400">盈利交易</p>
                   <p className="text-green-500 font-semibold">{result.winningTrades} 笔</p>
@@ -664,6 +687,18 @@ export default function CryptoBacktestTool() {
                 <div>
                   <p className="text-sm text-gray-400">亏损交易</p>
                   <p className="text-red-500 font-semibold">{result.losingTrades} 笔</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-400">胜率</p>
+                  <p className={`font-semibold ${result.winRate >= 50 ? "text-green-500" : "text-red-500"}`}>
+                    {formatNumber(result.winRate)}%
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-400">总收益率</p>
+                  <p className={`font-semibold ${result.totalReturnRate >= 0 ? "text-green-500" : "text-red-500"}`}>
+                    {formatNumber(result.totalReturnRate)}%
+                  </p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-400">总盈利</p>
@@ -674,12 +709,30 @@ export default function CryptoBacktestTool() {
                   <p className="text-red-500 font-semibold">{formatNumber(result.totalLoss)}%</p>
                 </div>
                 <div>
+                  <p className="text-sm text-gray-400">净利润</p>
+                  <p className={`font-semibold ${result.netProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
+                    {formatNumber(result.netProfit)}%
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-400">年化收益率</p>
+                  <p className={`font-semibold ${result.annualizedReturn >= 0 ? "text-green-500" : "text-red-500"}`}>
+                    {formatNumber(result.annualizedReturn)}%
+                  </p>
+                </div>
+                <div>
                   <p className="text-sm text-gray-400">平均盈利</p>
                   <p className="text-green-500 font-semibold">{formatNumber(result.avgWin)}%</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-400">平均亏损</p>
                   <p className="text-red-500 font-semibold">{formatNumber(result.avgLoss)}%</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-400">盈亏比</p>
+                  <p className="font-semibold">
+                    {result.profitFactor === Infinity ? "∞" : formatNumber(result.profitFactor)}
+                  </p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-400">最大回撤</p>
