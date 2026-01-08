@@ -422,6 +422,13 @@ export default function BinanceAutoTrader() {
                 } else if (dailyTradesCount >= tradingConfig.dailyTradesLimit) {
                   notExecutedReason = `已达到每日交易限制 (${tradingConfig.dailyTradesLimit})`;
                   canExecute = false;
+                } else {
+                  // 检查该合约是否已有持仓
+                  const existingPosition = positions.find(p => p.symbol === symbol && p.positionAmt !== 0);
+                  if (existingPosition) {
+                    notExecutedReason = `该合约已有持仓 (${existingPosition.positionSide}, 数量: ${existingPosition.positionAmt})`;
+                    canExecute = false;
+                  }
                 }
 
                 // 添加到信号列表
