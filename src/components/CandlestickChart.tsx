@@ -85,7 +85,8 @@ export default function CandlestickChart({
       height,
     });
 
-    const candlestickSeries = (chart as any).addCandlestickSeries({
+    // Add candlestick series
+    candlestickSeriesRef.current = chart.addCandlestickSeries({
       upColor: "#22c55e",
       downColor: "#ef4444",
       borderUpColor: "#22c55e",
@@ -94,31 +95,31 @@ export default function CandlestickChart({
       wickDownColor: "#ef4444",
     });
 
-    const emaShortSeries = (chart as any).addLineSeries({
+    // Add EMA short series
+    emaShortSeriesRef.current = chart.addLineSeries({
       color: "#3b82f6",
       lineWidth: 1,
       title: "EMA" + (emaShort?.length || 20),
     });
 
-    const emaLongSeries = (chart as any).addLineSeries({
+    // Add EMA long series
+    emaLongSeriesRef.current = chart.addLineSeries({
       color: "#f59e0b",
       lineWidth: 1,
       title: "EMA" + (emaLong?.length || 60),
     });
 
-    const volumeSeries = (chart as any).addHistogramSeries({
+    // Add volume series
+    volumeSeriesRef.current = chart.addHistogramSeries({
       color: "#6b7280",
       priceFormat: {
         type: "volume",
       },
       priceScaleId: "",
-      scaleMargins: {
-        top: 0.8,
-        bottom: 0,
-      },
     });
 
-    (chart as any).priceScale("").applyOptions({
+    // Apply options to volume series
+    volumeSeriesRef.current.priceScale().applyOptions({
       scaleMargins: {
         top: 0.8,
         bottom: 0,
@@ -126,10 +127,6 @@ export default function CandlestickChart({
     });
 
     chartRef.current = chart;
-    candlestickSeriesRef.current = candlestickSeries;
-    emaShortSeriesRef.current = emaShortSeries;
-    emaLongSeriesRef.current = emaLongSeries;
-    volumeSeriesRef.current = volumeSeries;
 
     const handleResize = () => {
       if (chartContainerRef.current && chartRef.current) {
@@ -205,22 +202,22 @@ export default function CandlestickChart({
       return [
         {
           time: entryTime,
-          position: trade.direction === "long" ? "belowBar" : "aboveBar",
+          position: trade.direction === "long" ? "belowBar" : "aboveBar" as const,
           color: trade.direction === "long" ? "#22c55e" : "#ef4444",
-          shape: trade.direction === "long" ? "arrowUp" : "arrowDown",
+          shape: trade.direction === "long" ? "arrowUp" : "arrowDown" as const,
           text: trade.direction === "long" ? "多" : "空",
         },
         {
           time: exitTime,
-          position: trade.direction === "long" ? "aboveBar" : "belowBar",
+          position: trade.direction === "long" ? "aboveBar" : "belowBar" as const,
           color: trade.pnl >= 0 ? "#22c55e" : "#ef4444",
-          shape: "circle",
+          shape: "circle" as const,
           text: trade.pnl >= 0 ? "盈" : "亏",
         },
       ];
     });
 
-    (candlestickSeriesRef.current as any).setMarkers(markers);
+    candlestickSeriesRef.current.setMarkers(markers);
   }, [trades]);
 
   return (
