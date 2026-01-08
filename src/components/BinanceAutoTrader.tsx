@@ -35,7 +35,7 @@ const DEFAULT_PARAMS: StrategyParams = {
   riskReward2: 2.5,
   leverage: 3,
   riskPercent: 2,
-  minTrendDistance: 0.15,
+  minTrendDistance: 0.05, // 降低最小趋势距离（0.15% -> 0.05%）
 };
 
 interface FuturesSymbol {
@@ -325,6 +325,7 @@ export default function BinanceAutoTrader() {
             if (signal) {
               signalsFound++;
               addLog(`  🎯 ${symbol} 发现${signal.direction === 'long' ? '多头' : '空头'}信号! 价格: ${signal.entryPrice}`);
+              addLog(`  📋 信号原因: ${signal.reason}`);
 
               // 检查是否可以执行交易
               let canExecute = autoTrading;
@@ -368,7 +369,9 @@ export default function BinanceAutoTrader() {
                 addLog(`  ⏭️ ${symbol} 跳过交易: ${notExecutedReason}`);
               }
             } else {
-              addLog(`  ✖️ ${symbol} 无信号 - ${reason}`);
+              // 显示更详细的未触发原因
+              addLog(`  ✖️ ${symbol} 无信号`);
+              addLog(`  📊 检测结果: ${reason}`);
             }
           } else {
             addLog(`  ⚠️ ${symbol} K线数据不足 (需要 ${strategyParams.emaLong + 10} 条)`);
@@ -1025,7 +1028,7 @@ export default function BinanceAutoTrader() {
     return rsi;
   };
 
-  // 15分钟趋势判断
+  // 15分钟趋势判断（优化版：更宽松的条件）
   const getTrendDirection = (
     data15m: KLineData[],
     emaShort: number[],
@@ -1043,47 +1046,40 @@ export default function BinanceAutoTrader() {
 
     // 检查趋势距离
     const distance = Math.abs(emaS - emaL) / emaL * 100;
-    if (distance < strategyParams.minTrendDistance) return "none";
+    if (distance < strategyParams.minTrendDistance) {
+      console.log(`[趋势判断] 距离不足: ${distance.toFixed(3)}% < ${strategyParams.minTrendDistance}%`);
+      return "none";
+    }
 
-    // 多头条件
-    const bullish = emaS > emaL && close > emaS && volume >= volMA;
+    // 简化多头条件：只需要EMA多头排列且价格在EMA20上方
+    const bullish = emaS > emaL && close > emaS;
     if (bullish) {
-      // 检查最近3根K线是否跌破EMA60
-      let valid = true;
-      for (let i = 1; i <= 3 && index - i >= 0; i++) {
-        if (data15m[index - i].close < emaLong[index - i]) {
-          valid = false;
-          break;
-        }
-      }
-      if (valid) return "long";
+      console.log(`[趋势判断] 多头条件满足: EMA20(${emaS.toFixed(2)}) > EMA60(${emaL.toFixed(2)}), 价格(${close.toFixed(2)}) > EMA20`);
+      // 可选：检查最近3根K线是否跌破EMA60（宽松版本移除此检查）
+      return "long";
     }
 
-    // 空头条件
-    const bearish = emaS < emaL && close < emaS && volume >= volMA;
+    // 简化空头条件：只需要EMA空头排列且价格在EMA20下方
+    const bearish = emaS < emaL && close < emaS;
     if (bearish) {
-      let valid = true;
-      for (let i = 1; i <= 3 && index - i >= 0; i++) {
-        if (data15m[index - i].close > emaLong[index - i]) {
-          valid = false;
-          break;
-        }
-      }
-      if (valid) return "short";
+      console.log(`[趋势判断] 空头条件满足: EMA20(${emaS.toFixed(2)}) < EMA60(${emaL.toFixed(2)}), 价格(${close.toFixed(2)}) < EMA20`);
+      // 可选：检查最近3根K线是否突破EMA60（宽松版本移除此检查）
+      return "short";
     }
 
+    console.log(`[趋势判断] 趋势不明确: EMA20=${emaS.toFixed(2)}, EMA60=${emaL.toFixed(2)}, 价格=${close.toFixed(2)}`);
     return "none";
   };
 
-  // 5分钟进场逻辑
+  // 5分钟进场逻辑（优化版：更简单的条件）
   const checkEntrySignal = (
     data5m: KLineData[],
     trendDirection: "long" | "short",
     emaShort5m: number[],
     emaLong5m: number[],
     rsi5m: number[]
-  ): { signal: boolean; type: "long" | "short" } => {
-    if (data5m.length < strategyParams.emaLong + 10) return { signal: false, type: trendDirection };
+  ): { signal: boolean; type: "long" | "short"; reason: string } => {
+    if (data5m.length < strategyParams.emaLong + 10) return { signal: false, type: trendDirection, reason: "数据不足" };
 
     const index = data5m.length - 1;
     const current = data5m[index];
@@ -1094,29 +1090,56 @@ export default function BinanceAutoTrader() {
     const rsi = rsi5m[index];
     const rsiPrev = rsi5m[index - 1];
 
-    if (trendDirection === "long") {
-      // 做多条件：价格回踩EMA20或EMA60后重新站上
-      const touchedEma = prev.low <= emaS || prev.low <= emaL;
-      const recovered = current.close > emaS;
-      const rsiUp = rsi > rsiPrev && rsi < 70;
-      const bullishCandle = current.close > current.open && current.close > prev.close;
+    console.log(`[5分钟进场] 趋势: ${trendDirection}, 价格: ${current.close.toFixed(2)}, EMA20: ${emaS.toFixed(2)}, EMA60: ${emaL.toFixed(2)}, RSI: ${rsi.toFixed(1)}`);
 
-      if (touchedEma && recovered && (rsiUp || bullishCandle)) {
-        return { signal: true, type: "long" };
+    if (trendDirection === "long") {
+      // 优化后的做多条件：价格在EMA20上方且满足以下任一条件
+      const priceAboveEMA = current.close > emaS;
+
+      // 条件1：RSI从超卖区反弹（RSI < 50 且 RSI上升）
+      const rsiRecovery = rsi < 50 && rsi > rsiPrev;
+
+      // 条件2：最近3根K线有回踩（价格曾触及EMA20）
+      const touchedEma = prev.low <= emaS || prev2.low <= emaS;
+
+      // 条件3：阳线确认（当前K线收阳且涨幅 > 0.1%）
+      const bullishCandle = current.close > current.open &&
+                           (current.close - current.open) / current.open > 0.001;
+
+      console.log(`[5分钟进场 多头] 价格>EMA: ${priceAboveEMA}, RSI反弹: ${rsiRecovery}, 回踩: ${touchedEma}, 阳线: ${bullishCandle}`);
+
+      // 只需要满足任意2个条件即可
+      const conditions = [priceAboveEMA, rsiRecovery, touchedEma, bullishCandle].filter(Boolean).length;
+      if (conditions >= 2) {
+        console.log(`[5分钟进场] ✅ 多头信号触发 (${conditions}/4条件)`);
+        return { signal: true, type: "long", reason: "多头进场（满足2+条件）" };
       }
     } else {
-      // 做空条件：价格反弹EMA20或EMA60后重新跌破
-      const touchedEma = prev.high >= emaS || prev.high >= emaL;
-      const brokeDown = current.close < emaS;
-      const rsiDown = rsi < rsiPrev && rsi > 30;
-      const bearishCandle = current.close < current.open && current.close < prev.close;
+      // 优化后的做空条件：价格在EMA20下方且满足以下任一条件
+      const priceBelowEMA = current.close < emaS;
 
-      if (touchedEma && brokeDown && (rsiDown || bearishCandle)) {
-        return { signal: true, type: "short" };
+      // 条件1：RSI从超买区回落（RSI > 50 且 RSI下降）
+      const rsiDecline = rsi > 50 && rsi < rsiPrev;
+
+      // 条件2：最近3根K线有反弹（价格曾触及EMA20）
+      const touchedEma = prev.high >= emaS || prev2.high >= emaS;
+
+      // 条件3：阴线确认（当前K线收阴且跌幅 > 0.1%）
+      const bearishCandle = current.close < current.open &&
+                           (current.open - current.close) / current.open > 0.001;
+
+      console.log(`[5分钟进场 空头] 价格<EMA: ${priceBelowEMA}, RSI回落: ${rsiDecline}, 反弹: ${touchedEma}, 阴线: ${bearishCandle}`);
+
+      // 只需要满足任意2个条件即可
+      const conditions = [priceBelowEMA, rsiDecline, touchedEma, bearishCandle].filter(Boolean).length;
+      if (conditions >= 2) {
+        console.log(`[5分钟进场] ✅ 空头信号触发 (${conditions}/4条件)`);
+        return { signal: true, type: "short", reason: "空头进场（满足2+条件）" };
       }
     }
 
-    return { signal: false, type: trendDirection };
+    console.log(`[5分钟进场] ❌ 未触发进场信号`);
+    return { signal: false, type: trendDirection, reason: "条件不满足" };
   };
 
   // 检测交易信号（多时间框架：15分钟趋势 + 5分钟回调进场）
@@ -1159,7 +1182,7 @@ export default function BinanceAutoTrader() {
     const emaLong5m = calculateEMA(data5m, strategyParams.emaLong);
     const rsi5m = calculateRSI(data5m, strategyParams.rsiPeriod);
 
-    const { signal, type } = checkEntrySignal(
+    const { signal, type, reason: entryReason } = checkEntrySignal(
       data5m,
       trendDirection,
       emaShort5m,
@@ -1170,19 +1193,22 @@ export default function BinanceAutoTrader() {
     if (!signal) {
       const index = data5m.length - 1;
       const rsi = rsi5m[index];
+      console.log(`[信号检测] ❌ ${symbol} 5分钟进场未通过: ${entryReason}`);
       return {
         signal: null,
-        reason: `未触发进场 (趋势:${trendDirection}, RSI:${rsi.toFixed(1)})`
+        reason: `未触发进场 (趋势:${trendDirection}, ${entryReason}, RSI:${rsi.toFixed(1)})`
       };
     }
 
     const current5m = data5m[data5m.length - 1];
+    const signalReason = `15分钟${trendDirection === "long" ? "多头" : "空头"}趋势 + 5分钟回调进场 (${entryReason})`;
+    console.log(`[信号检测] ✅ ${symbol} 信号触发: ${signalReason}`);
     return {
       signal: {
         symbol,
         direction: type,
         time: current5m.timestamp,
-        reason: `15分钟${trendDirection === "long" ? "多头" : "空头"}趋势 + 5分钟回调进场`,
+        reason: signalReason,
         confidence: 0.85,
         entryPrice: current5m.close,
       },
