@@ -2005,9 +2005,22 @@ export default function BinanceAutoTrader() {
       )}
 
       {/* 合约选择 */}
-      {connected && (
+      {connected && !autoScanAll && (
         <div className="bg-gray-800 rounded-lg p-6">
           <h2 className="text-xl font-bold mb-4">选择监控合约</h2>
+          <div className="bg-blue-900/20 rounded-lg p-4 mb-4">
+            <div className="text-sm text-blue-300">
+              <strong className="text-blue-400">功能说明：</strong>
+              <ul className="list-disc list-inside mt-2 space-y-1">
+                <li>实时推送选定合约的K线数据</li>
+                <li>显示实时图表和趋势信号</li>
+                <li><strong>不执行交易</strong>，仅用于监控和观察</li>
+              </ul>
+              <div className="mt-3 p-2 bg-blue-800/30 rounded text-xs">
+                💡 提示：如需自动交易，请开启下方的"自动扫描所有合约"功能，它会自动扫描高成交量合约并执行交易
+              </div>
+            </div>
+          </div>
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2 max-h-60 overflow-y-auto">
             {symbols.map((symbol) => (
               <label
@@ -2036,6 +2049,27 @@ export default function BinanceAutoTrader() {
           </div>
           <div className="mt-4 text-sm text-gray-400">
             已选择: {selectedSymbols.length} 个合约
+          </div>
+        </div>
+      )}
+
+      {/* 自动扫描模式提示 */}
+      {connected && autoScanAll && (
+        <div className="bg-green-900/20 border border-green-800 rounded-lg p-6">
+          <div className="flex items-center gap-3">
+            <div className="text-2xl">🤖</div>
+            <div>
+              <h2 className="text-lg font-bold text-green-400">自动扫描模式已启用</h2>
+              <div className="text-sm text-green-300 mt-2">
+                系统将自动扫描24h成交量最高的前10个合约，发现交易信号后自动执行交易。
+              </div>
+              <div className="text-xs text-green-200/70 mt-2">
+                • 无需手动选择合约 • 每5分钟自动扫描 • 自动执行符合条件的交易
+              </div>
+              <div className="mt-3 text-xs text-gray-400">
+                💡 如需手动监控特定合约的图表，请关闭"自动扫描所有合约"开关
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -2523,8 +2557,8 @@ export default function BinanceAutoTrader() {
                       disabled={!autoTrading}
                       className="w-4 h-4"
                     />
-                    <span className={`text-sm ${autoScanAll ? "text-blue-500 font-bold" : "text-gray-300"}`}>
-                      自动扫描所有合约 (每5分钟)
+                    <span className={`text-sm ${autoScanAll ? "text-green-500 font-bold" : "text-gray-300"}`}>
+                      🚀 自动扫描并交易 (每5分钟)
                     </span>
                   </label>
 
@@ -2539,27 +2573,47 @@ export default function BinanceAutoTrader() {
                 </div>
 
                 {autoScanAll && (
-                  <div className="mt-3 p-3 bg-blue-900/20 rounded text-sm text-blue-300">
+                  <div className="mt-3 p-3 bg-green-900/20 rounded text-sm text-green-300">
                     <div className="flex items-center justify-between mb-2">
-                      <div className="font-bold">扫描规则:</div>
+                      <div className="font-bold">🎯 自动交易规则:</div>
                       <button
                         onClick={scanAllSymbols}
                         disabled={isScanning || !connected}
                         className={`px-3 py-1 rounded text-sm transition ${
                           isScanning
                             ? 'bg-gray-600 cursor-not-allowed'
-                            : 'bg-blue-600 hover:bg-blue-700'
+                            : 'bg-green-600 hover:bg-green-700'
                         }`}
                       >
                         {isScanning ? '扫描中...' : '立即扫描'}
                       </button>
                     </div>
                     <ul className="list-disc list-inside text-xs space-y-1">
-                      <li>自动扫描24h成交量最高的前10个合约</li>
-                      <li>每5分钟扫描一次，或点击"立即扫描"手动触发</li>
-                      <li>持仓数量未达限制时继续开仓 (当前: {positions.length}/{tradingConfig.maxOpenPositions})</li>
-                      <li>每日交易次数未达限制时继续交易 (今日: {dailyTradesCount}/{tradingConfig.dailyTradesLimit})</li>
-                      <li>发现信号但达到限制时，仍会继续扫描以发现新信号</li>
+                      <li><strong>扫描范围：</strong>24h成交量最高的前10个USDT合约</li>
+                      <li><strong>执行频率：</strong>每5分钟自动扫描一次，也可手动触发</li>
+                      <li><strong>交易限制：</strong>
+                        <ul className="list-decimal list-inside ml-4 mt-1 space-y-1">
+                          <li>持仓数量：当前 {positions.length}/{tradingConfig.maxOpenPositions}</li>
+                          <li>每日交易：今日 {dailyTradesCount}/{tradingConfig.dailyTradesLimit}</li>
+                        </ul>
+                      </li>
+                      <li><strong>筛选条件：</strong>15分钟趋势 + 5分钟回调进场（需满足2/4条件）</li>
+                      <li><strong>交易执行：</strong>发现符合条件的信号后自动开仓</li>
+                    </ul>
+                    <div className="mt-3 p-2 bg-green-800/30 rounded text-xs text-green-200">
+                      ✅ 此模式下无需手动选择合约，系统会自动发现交易机会
+                    </div>
+                  </div>
+                )}
+
+                {!autoScanAll && (
+                  <div className="mt-3 p-3 bg-yellow-900/20 rounded text-sm text-yellow-300">
+                    <div className="font-bold mb-2">⚠️ 当前为手动监控模式</div>
+                    <ul className="list-disc list-inside text-xs space-y-1">
+                      <li>仅监控上方已选择的 {selectedSymbols.length} 个合约</li>
+                      <li>实时推送K线数据和显示趋势信号</li>
+                      <li><strong>不执行任何交易</strong>（仅用于观察和分析）</li>
+                      <li>如需自动交易，请开启上方"自动扫描并交易"开关</li>
                     </ul>
                   </div>
                 )}
