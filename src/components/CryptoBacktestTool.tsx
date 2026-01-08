@@ -42,7 +42,7 @@ interface BacktestResult {
   trades: Trade[];
 }
 
-interface StrategyParams {
+export interface StrategyParams {
   emaShort: number;
   emaLong: number;
   rsiPeriod: number;
@@ -55,7 +55,7 @@ interface StrategyParams {
   minTrendDistance: number;
 }
 
-const DEFAULT_PARAMS: StrategyParams = {
+export const DEFAULT_PARAMS: StrategyParams = {
   emaShort: 20,
   emaLong: 60,
   rsiPeriod: 14,
