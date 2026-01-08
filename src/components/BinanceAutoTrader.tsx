@@ -1161,6 +1161,29 @@ export default function BinanceAutoTrader() {
     try {
       const side = signal.direction === "long" ? "BUY" : "SELL";
       const type = "MARKET";
+
+      // 设置杠杆（在交易前设置）
+      console.log(`[executeTrade] Setting leverage to ${strategyParams.leverage}x for ${signal.symbol}`);
+      const leverageResponse = await fetch("/api/binance/leverage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey,
+          apiSecret,
+          symbol: signal.symbol,
+          leverage: strategyParams.leverage,
+        }),
+      });
+
+      if (leverageResponse.ok) {
+        const leverageData = await leverageResponse.json();
+        console.log(`[executeTrade] Leverage set successfully: ${leverageData.leverage}x for ${leverageData.symbol}`);
+      } else {
+        const leverageError = await leverageResponse.json();
+        console.warn(`[executeTrade] Failed to set leverage: ${leverageError.error}`);
+        // 继续执行交易，但不设置杠杆
+      }
+
       const availableBalance = accountBalance.available;
       const positionValue = availableBalance * (tradingConfig.positionSizePercent / 100);
       const quantity = positionValue / signal.entryPrice;
@@ -1802,6 +1825,25 @@ export default function BinanceAutoTrader() {
               />
               <div className="text-xs text-gray-500 mt-1">
                 当前持仓: <span className={positions.length >= tradingConfig.maxOpenPositions ? "text-red-500 font-bold" : "text-green-500"}>{positions.length}/{tradingConfig.maxOpenPositions}</span>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">杠杆倍数</label>
+              <input
+                type="number"
+                value={strategyParams.leverage}
+                onChange={(e) => {
+                  const value = Number(e.target.value);
+                  if (value >= 1 && value <= 125) {
+                    setStrategyParams({ ...strategyParams, leverage: value });
+                  }
+                }}
+                className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                min="1"
+                max="125"
+              />
+              <div className="text-xs text-gray-500 mt-1">
+                币安支持 1-125 倍杠杆
               </div>
             </div>
             <div>
