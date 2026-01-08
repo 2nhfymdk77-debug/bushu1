@@ -1659,7 +1659,7 @@ export default function BinanceAutoTrader() {
         symbol: signal.symbol,
         side,
         type,
-        quantity,
+        quantity: formattedQuantity,
         price: signal.entryPrice,
         time: signal.time,
         status: orderStatus,
@@ -1669,7 +1669,7 @@ export default function BinanceAutoTrader() {
       setTradeRecords((prev) => [trade, ...prev.slice(0, 99)]);
       setLastSignalTimes((prev) => new Map(prev).set(signal.symbol, now));
       setDailyTradesCount((prev) => prev + 1);
-      addSystemLog(`交易成功: ${signal.symbol} ${side} ${quantity.toFixed(4)} @ ${signal.entryPrice}`, 'success');
+      addSystemLog(`交易成功: ${signal.symbol} ${side} ${formattedQuantity.toFixed(4)} @ ${signal.entryPrice}`, 'success');
 
       // 如果启用了止盈止损订单，立即挂止盈止损单
       if (tradingConfig.useStopTakeProfitOrders) {
