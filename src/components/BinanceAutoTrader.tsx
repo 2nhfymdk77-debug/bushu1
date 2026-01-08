@@ -1361,6 +1361,16 @@ export default function BinanceAutoTrader() {
       const emaS = emaShort15m[index];
       const emaL = emaLong15m[index];
       const close = data15m[index].close;
+
+      // 安全检查：确保EMA值存在
+      if (emaS === undefined || emaL === undefined || emaL === 0) {
+        return {
+          signal: null,
+          reason: `EMA计算失败`,
+          details: `EMA数组长度不足或计算异常`
+        };
+      }
+
       const distance = Math.abs(emaS - emaL) / emaL * 100;
       return {
         signal: null,
