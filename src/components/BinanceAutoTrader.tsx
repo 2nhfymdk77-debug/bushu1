@@ -774,7 +774,7 @@ export default function BinanceAutoTrader() {
 
       // 记录平仓交易
       const closeTrade: TradeRecord = {
-        id: Date.now().toString(),
+        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, // 唯一ID
         symbol: position.symbol,
         side,
         type: "MARKET",
@@ -871,7 +871,7 @@ export default function BinanceAutoTrader() {
 
       // 记录平仓交易
       const closeTrade: TradeRecord = {
-        id: Date.now().toString(),
+        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, // 唯一ID
         symbol: position.symbol,
         side,
         type: "MARKET",
@@ -889,6 +889,61 @@ export default function BinanceAutoTrader() {
     } catch (err: any) {
       console.error(`自动平仓失败: ${position.symbol}`, err);
       setError(`自动平仓失败: ${err.message}`);
+    }
+  };
+
+  // 刷新交易记录中待成交订单的状态
+  const refreshPendingOrders = async () => {
+    if (!connected || !apiKey || !apiSecret) return;
+
+    try {
+      // 获取所有订单
+      const ordersResponse = await fetch("/api/binance/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey, apiSecret, limit: 50 }),
+      });
+
+      if (!ordersResponse.ok) return;
+
+      const binanceOrders = await ordersResponse.json();
+
+      // 过滤出非条件订单（MARKET, LIMIT等），排除止损止盈订单
+      const activeOrders = binanceOrders.filter((order: any) =>
+        !["STOP", "STOP_MARKET", "STOP_LOSS", "STOP_LOSS_LIMIT",
+          "TAKE_PROFIT", "TAKE_PROFIT_MARKET", "TAKE_PROFIT_LIMIT"].includes(order.type)
+      );
+
+      // 更新交易记录中的订单状态
+      setTradeRecords((prev) =>
+        prev.map((trade) => {
+          if (trade.status === "PENDING" && trade.orderId) {
+            // 在币安订单列表中查找对应订单
+            const binanceOrder = activeOrders.find(
+              (order: any) => order.orderId === trade.orderId
+            );
+
+            if (binanceOrder) {
+              // 映射币安订单状态
+              const statusMap: Record<string, "FILLED" | "PARTIALLY_FILLED" | "PENDING" | "FAILED"> = {
+                NEW: "PENDING",
+                PARTIALLY_FILLED: "PARTIALLY_FILLED",
+                FILLED: "FILLED",
+                EXPIRED: "FAILED",
+                REJECTED: "FAILED",
+                CANCELED: "FAILED",
+              };
+
+              const newStatus = statusMap[binanceOrder.status] || "PENDING";
+              console.log(`[refreshPendingOrders] Order ${trade.orderId} status: ${binanceOrder.status} -> ${newStatus}`);
+              return { ...trade, status: newStatus };
+            }
+          }
+          return trade;
+        })
+      );
+    } catch (err: any) {
+      console.error("[refreshPendingOrders] Failed to refresh orders:", err);
     }
   };
 
@@ -1078,6 +1133,9 @@ export default function BinanceAutoTrader() {
         const ordersData = await ordersResponse.json();
         setOrders(ordersData);
         console.log('[fetchAccountInfo] Orders fetched:', ordersData.length);
+
+        // 刷新交易记录中待成交订单的状态
+        await refreshPendingOrders();
       } else {
         const errorData = await ordersResponse.json();
         console.error('[fetchAccountInfo] Orders error:', errorData);
@@ -1707,13 +1765,13 @@ export default function BinanceAutoTrader() {
         result.status === "FILLED" ? "FILLED" : "PENDING";
 
       const trade: TradeRecord = {
-        id: Date.now().toString(),
+        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, // 唯一ID
         symbol: signal.symbol,
         side,
         type,
         quantity: formattedQuantity,
         price: signal.entryPrice,
-        time: signal.time,
+        time: Date.now(), // 使用当前时间而不是signal.time
         status: orderStatus,
         orderId,
       };
@@ -1808,6 +1866,9 @@ export default function BinanceAutoTrader() {
         }
       }
 
+      // 刷新交易记录中待成交订单的状态
+      await refreshPendingOrders();
+
       // 立即更新持仓信息，确保下次扫描能正确检查持仓数量限制
       await fetchAccountInfo();
     } catch (err: any) {
@@ -1816,13 +1877,13 @@ export default function BinanceAutoTrader() {
       setError(errorMsg);
 
       const failedTrade: TradeRecord = {
-        id: Date.now().toString(),
+        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, // 唯一ID
         symbol: signal.symbol,
         side: signal.direction === "long" ? "BUY" : "SELL",
         type: "MARKET",
         quantity: 0,
         price: signal.entryPrice,
-        time: signal.time,
+        time: Date.now(), // 使用当前时间
         status: "FAILED",
       };
       setTradeRecords((prev) => [failedTrade, ...prev.slice(0, 99)]);
