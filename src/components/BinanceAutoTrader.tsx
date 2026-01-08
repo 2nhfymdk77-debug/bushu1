@@ -245,6 +245,10 @@ export default function BinanceAutoTrader() {
     }
 
     setIsScanning(true);
+
+    // 开始扫描前先获取最新的持仓信息，确保持仓数量限制检查准确
+    await fetchAccountInfo();
+
     setScanLog([]);
     const addLog = (msg: string) => {
       const timestamp = new Date().toLocaleTimeString();
@@ -331,6 +335,15 @@ export default function BinanceAutoTrader() {
         // 检查是否达到持仓数量限制
         if (positions.length >= tradingConfig.maxOpenPositions) {
           addLog(`⚠️ 已达到最大持仓数量限制 (${tradingConfig.maxOpenPositions})，跳过开新仓位`);
+          skippedCount++;
+          continue;
+        }
+
+        // 检查该合约的时间间隔（避免同一合约频繁交易）
+        const now = Date.now();
+        const lastTime = lastSignalTimes.get(symbol) || 0;
+        if (now - lastTime < 300000) { // 5分钟
+          addLog(`⚠️ 合约 ${symbol} 距离上次交易不足5分钟，跳过`);
           skippedCount++;
           continue;
         }
@@ -1650,6 +1663,9 @@ export default function BinanceAutoTrader() {
       setLastSignalTimes((prev) => new Map(prev).set(signal.symbol, now));
       setDailyTradesCount((prev) => prev + 1);
       addSystemLog(`交易成功: ${signal.symbol} ${side} ${quantity.toFixed(4)} @ ${signal.entryPrice}`, 'success');
+
+      // 立即更新持仓信息，确保下次扫描能正确检查持仓数量限制
+      await fetchAccountInfo();
     } catch (err: any) {
       const errorMsg = err.message || "交易执行失败";
       addSystemLog(`交易失败: ${errorMsg}`, 'error');
