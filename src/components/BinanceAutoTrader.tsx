@@ -247,17 +247,22 @@ export default function BinanceAutoTrader() {
           setScanProgress(`已达到每日交易限制 (${tradingConfig.dailyTradesLimit})，继续扫描中...`);
         }
 
-        // 获取K线数据
+        // 获取K线数据（同时获取15分钟和5分钟）
         try {
-          const klineResponse = await fetch(
-            `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=100`
-          );
+          // 并行获取15分钟和5分钟K线数据
+          const [kline15mResponse, kline5mResponse] = await Promise.all([
+            fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=100`),
+            fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=5m&limit=200`)
+          ]);
 
-          if (!klineResponse.ok) continue;
+          if (!kline15mResponse.ok || !kline5mResponse.ok) continue;
 
-          const klineDataRaw = await klineResponse.json();
+          const [kline15mRaw, kline5mRaw] = await Promise.all([
+            kline15mResponse.json(),
+            kline5mResponse.json()
+          ]);
 
-          const klines: KLineData[] = klineDataRaw.map((k: any[]) => ({
+          const klines15m: KLineData[] = kline15mRaw.map((k: any[]) => ({
             timestamp: k[0],
             open: parseFloat(k[1]),
             high: parseFloat(k[2]),
@@ -266,9 +271,19 @@ export default function BinanceAutoTrader() {
             volume: parseFloat(k[5]),
           }));
 
-          // 检测信号
-          if (klines.length >= strategyParams.emaLong + 10) {
-            const signal = checkSignals(symbol, klines);
+          const klines5m: KLineData[] = kline5mRaw.map((k: any[]) => ({
+            timestamp: k[0],
+            open: parseFloat(k[1]),
+            high: parseFloat(k[2]),
+            low: parseFloat(k[3]),
+            close: parseFloat(k[4]),
+            volume: parseFloat(k[5]),
+          }));
+
+          // 检测信号（多时间框架：15分钟趋势 + 5分钟回调进场）
+          if (klines15m.length >= strategyParams.emaLong + 10 &&
+              klines5m.length >= strategyParams.emaLong + 10) {
+            const signal = checkSignals(symbol, klines15m, klines5m);
             if (signal) {
               signalsFound++;
 
@@ -518,16 +533,16 @@ export default function BinanceAutoTrader() {
       if (tradingConfig.reverseSignalClose) {
         const symbolData = klineData.get(symbol);
         if (symbolData && symbolData.length >= strategyParams.emaLong + 10) {
-          const signal = checkSignals(symbol, symbolData);
+          const trendSignal = checkTrendDirection(symbol, symbolData);
 
-          if (signal) {
+          if (trendSignal) {
             // 检测到反向信号
-            const isReverseSignal = (isLong && signal.direction === "short") ||
-                                   (!isLong && signal.direction === "long");
+            const isReverseSignal = (isLong && trendSignal.direction === "short") ||
+                                   (!isLong && trendSignal.direction === "long");
 
             if (isReverseSignal) {
-              console.log(`反向信号平仓: ${symbol} 持仓方向: ${isLong ? "多头" : "空头"} 信号: ${signal.direction}`);
-              await executeAutoClose(position, `反向信号: ${signal.direction}`);
+              console.log(`反向信号平仓: ${symbol} 持仓方向: ${isLong ? "多头" : "空头"} 信号: ${trendSignal.direction}`);
+              await executeAutoClose(position, `反向信号: ${trendSignal.direction}`);
               continue;
             }
           }
@@ -879,73 +894,222 @@ export default function BinanceAutoTrader() {
     return ma;
   };
 
-  // 检测交易信号
-  const checkSignals = (symbol: string, data15m: KLineData[]): Signal | null => {
-    if (data15m.length < strategyParams.emaLong + 10) return null;
+  // 计算RSI
+  const calculateRSI = (data: KLineData[], period: number): number[] => {
+    const rsi: number[] = new Array(data.length).fill(50);
+    const gains: number[] = [];
+    const losses: number[] = [];
 
-    const emaShort = calculateEMA(data15m, strategyParams.emaShort);
-    const emaLong = calculateEMA(data15m, strategyParams.emaLong);
-    const volMA = calculateVolumeMA(data15m, strategyParams.volumePeriod);
+    for (let i = 1; i < data.length; i++) {
+      const change = data[i].close - data[i - 1].close;
+      gains.push(change > 0 ? change : 0);
+      losses.push(change < 0 ? Math.abs(change) : 0);
+    }
 
-    const current = data15m[data15m.length - 1];
-    const emaS = emaShort[emaShort.length - 1];
-    const emaL = emaLong[emaLong.length - 1];
-    const volMAVal = volMA[volMA.length - 1];
+    if (gains.length < period) {
+      return rsi;
+    }
 
+    // 初始平均
+    let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
+
+    // 计算第一个RSI值
+    let firstRSI: number;
+    if (avgLoss === 0) {
+      firstRSI = 100;
+    } else {
+      const rs = avgGain / avgLoss;
+      firstRSI = 100 - 100 / (1 + rs);
+    }
+    rsi[period] = firstRSI;
+
+    // 后续RSI值
+    for (let i = period; i < gains.length; i++) {
+      avgGain = (avgGain * (period - 1) + gains[i]) / period;
+      avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+
+      const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+      rsi[i + 1] = 100 - 100 / (1 + rs);
+    }
+
+    return rsi;
+  };
+
+  // 15分钟趋势判断
+  const getTrendDirection = (
+    data15m: KLineData[],
+    emaShort: number[],
+    emaLong: number[],
+    volumeMA: number[]
+  ): "long" | "short" | "none" => {
+    if (data15m.length < strategyParams.emaLong) return "none";
+
+    const index = data15m.length - 1;
+    const emaS = emaShort[index];
+    const emaL = emaLong[index];
+    const close = data15m[index].close;
+    const volume = data15m[index].volume;
+    const volMA = volumeMA[index];
+
+    // 检查趋势距离
     const distance = Math.abs(emaS - emaL) / emaL * 100;
-    if (distance < strategyParams.minTrendDistance) return null;
+    if (distance < strategyParams.minTrendDistance) return "none";
 
-    const bullish =
-      emaS > emaL &&
-      current.close > emaS &&
-      current.volume >= volMAVal;
-
+    // 多头条件
+    const bullish = emaS > emaL && close > emaS && volume >= volMA;
     if (bullish) {
+      // 检查最近3根K线是否跌破EMA60
       let valid = true;
-      for (let i = 1; i <= 3; i++) {
-        if (data15m[data15m.length - 1 - i].close < emaLong[emaLong.length - 1 - i]) {
+      for (let i = 1; i <= 3 && index - i >= 0; i++) {
+        if (data15m[index - i].close < emaLong[index - i]) {
           valid = false;
           break;
         }
       }
-      if (valid) {
-        return {
-          symbol,
-          direction: "long",
-          time: current.timestamp,
-          reason: `EMA${strategyParams.emaShort} > EMA${strategyParams.emaLong}`,
-          confidence: 0.75,
-          entryPrice: current.close,
-        };
-      }
+      if (valid) return "long";
     }
 
-    const bearish =
-      emaS < emaL &&
-      current.close < emaS &&
-      current.volume >= volMAVal;
-
+    // 空头条件
+    const bearish = emaS < emaL && close < emaS && volume >= volMA;
     if (bearish) {
       let valid = true;
-      for (let i = 1; i <= 3; i++) {
-        if (data15m[data15m.length - 1 - i].close > emaLong[emaLong.length - 1 - i]) {
+      for (let i = 1; i <= 3 && index - i >= 0; i++) {
+        if (data15m[index - i].close > emaLong[index - i]) {
           valid = false;
           break;
         }
       }
-      if (valid) {
-        return {
-          symbol,
-          direction: "short",
-          time: current.timestamp,
-          reason: `EMA${strategyParams.emaShort} < EMA${strategyParams.emaLong}`,
-          confidence: 0.75,
-          entryPrice: current.close,
-        };
+      if (valid) return "short";
+    }
+
+    return "none";
+  };
+
+  // 5分钟进场逻辑
+  const checkEntrySignal = (
+    data5m: KLineData[],
+    trendDirection: "long" | "short",
+    emaShort5m: number[],
+    emaLong5m: number[],
+    rsi5m: number[]
+  ): { signal: boolean; type: "long" | "short" } => {
+    if (data5m.length < strategyParams.emaLong + 10) return { signal: false, type: trendDirection };
+
+    const index = data5m.length - 1;
+    const current = data5m[index];
+    const prev = data5m[index - 1];
+    const prev2 = data5m[index - 2];
+    const emaS = emaShort5m[index];
+    const emaL = emaLong5m[index];
+    const rsi = rsi5m[index];
+    const rsiPrev = rsi5m[index - 1];
+
+    if (trendDirection === "long") {
+      // 做多条件：价格回踩EMA20或EMA60后重新站上
+      const touchedEma = prev.low <= emaS || prev.low <= emaL;
+      const recovered = current.close > emaS;
+      const rsiUp = rsi > rsiPrev && rsi < 70;
+      const bullishCandle = current.close > current.open && current.close > prev.close;
+
+      if (touchedEma && recovered && (rsiUp || bullishCandle)) {
+        return { signal: true, type: "long" };
+      }
+    } else {
+      // 做空条件：价格反弹EMA20或EMA60后重新跌破
+      const touchedEma = prev.high >= emaS || prev.high >= emaL;
+      const brokeDown = current.close < emaS;
+      const rsiDown = rsi < rsiPrev && rsi > 30;
+      const bearishCandle = current.close < current.open && current.close < prev.close;
+
+      if (touchedEma && brokeDown && (rsiDown || bearishCandle)) {
+        return { signal: true, type: "short" };
       }
     }
 
-    return null;
+    return { signal: false, type: trendDirection };
+  };
+
+  // 检测交易信号（多时间框架：15分钟趋势 + 5分钟回调进场）
+  const checkSignals = (
+    symbol: string,
+    data15m: KLineData[],
+    data5m: KLineData[]
+  ): Signal | null => {
+    // 检查数据量
+    if (data15m.length < strategyParams.emaLong + 10 || data5m.length < strategyParams.emaLong + 10) {
+      return null;
+    }
+
+    // 步骤1: 15分钟趋势过滤
+    const emaShort15m = calculateEMA(data15m, strategyParams.emaShort);
+    const emaLong15m = calculateEMA(data15m, strategyParams.emaLong);
+    const volumeMA15m = calculateVolumeMA(data15m, strategyParams.volumePeriod);
+
+    const trendDirection = getTrendDirection(
+      data15m,
+      emaShort15m,
+      emaLong15m,
+      volumeMA15m
+    );
+
+    if (trendDirection === "none") return null;
+
+    // 步骤2: 5分钟回调进场
+    const emaShort5m = calculateEMA(data5m, strategyParams.emaShort);
+    const emaLong5m = calculateEMA(data5m, strategyParams.emaLong);
+    const rsi5m = calculateRSI(data5m, strategyParams.rsiPeriod);
+
+    const { signal, type } = checkEntrySignal(
+      data5m,
+      trendDirection,
+      emaShort5m,
+      emaLong5m,
+      rsi5m
+    );
+
+    if (!signal) return null;
+
+    const current5m = data5m[data5m.length - 1];
+    return {
+      symbol,
+      direction: type,
+      time: current5m.timestamp,
+      reason: `15分钟${trendDirection === "long" ? "多头" : "空头"}趋势 + 5分钟回调进场`,
+      confidence: 0.85,
+      entryPrice: current5m.close,
+    };
+  };
+
+  // 仅检查15分钟趋势方向变化（用于反向信号平仓等场景）
+  const checkTrendDirection = (
+    symbol: string,
+    data15m: KLineData[]
+  ): Signal | null => {
+    if (data15m.length < strategyParams.emaLong + 10) return null;
+
+    const emaShort15m = calculateEMA(data15m, strategyParams.emaShort);
+    const emaLong15m = calculateEMA(data15m, strategyParams.emaLong);
+    const volumeMA15m = calculateVolumeMA(data15m, strategyParams.volumePeriod);
+
+    const trendDirection = getTrendDirection(
+      data15m,
+      emaShort15m,
+      emaLong15m,
+      volumeMA15m
+    );
+
+    if (trendDirection === "none") return null;
+
+    const current15m = data15m[data15m.length - 1];
+    return {
+      symbol,
+      direction: trendDirection,
+      time: current15m.timestamp,
+      reason: `15分钟${trendDirection === "long" ? "多头" : "空头"}趋势`,
+      confidence: 0.6,
+      entryPrice: current15m.close,
+    };
   };
 
   // 执行交易
@@ -1086,8 +1250,9 @@ export default function BinanceAutoTrader() {
 
       const symbolData = klineData.get(symbol) || [];
       if (symbolData.length >= strategyParams.emaLong + 10) {
-        const signal = checkSignals(symbol, [...symbolData, kline].slice(-200));
-        if (signal) {
+        // WebSocket实时监控只检查15分钟趋势方向（完整的信号扫描由scanAllSymbols完成）
+        const trendSignal = checkTrendDirection(symbol, [...symbolData, kline].slice(-200));
+        if (trendSignal) {
           // 检查是否可以执行交易
           let canExecute = autoTrading;
           let notExecutedReason = "";
@@ -1107,21 +1272,21 @@ export default function BinanceAutoTrader() {
             const lastSignal = prev[0];
             if (
               lastSignal &&
-              lastSignal.symbol === signal.symbol &&
-              lastSignal.direction === signal.direction &&
+              lastSignal.symbol === trendSignal.symbol &&
+              lastSignal.direction === trendSignal.direction &&
               Date.now() - lastSignal.time < 300000
             ) {
               return prev;
             }
             return [{
-              ...signal,
+              ...trendSignal,
               executed: canExecute,
               notExecutedReason: canExecute ? undefined : notExecutedReason
             }, ...prev.slice(0, 49)];
           });
 
           if (canExecute) {
-            executeTrade(signal);
+            executeTrade(trendSignal);
           }
         }
       }
