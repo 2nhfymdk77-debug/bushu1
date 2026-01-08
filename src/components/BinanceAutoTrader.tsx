@@ -175,7 +175,7 @@ export default function BinanceAutoTrader() {
   const [klineData, setKlineData] = useState<Map<string, KLineData[]>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [lastSignalTime, setLastSignalTime] = useState<number>(0);
+  const [lastSignalTimes, setLastSignalTimes] = useState<Map<string, number>>(new Map()); // 按合约记录最后交易时间
   const [dailyTradesCount, setDailyTradesCount] = useState(0);
   const [scanIntervalRef, setScanIntervalRef] = useState<NodeJS.Timeout | null>(null);
   const [isScanning, setIsScanning] = useState(false);
@@ -1226,9 +1226,11 @@ export default function BinanceAutoTrader() {
       return;
     }
 
-    // 检查时间间隔（避免频繁交易）
+    // 检查该合约的时间间隔（避免同一合约频繁交易）
     const now = Date.now();
-    if (now - lastSignalTime < 300000) { // 5分钟
+    const lastTime = lastSignalTimes.get(signal.symbol) || 0;
+    if (now - lastTime < 300000) { // 5分钟
+      console.log(`合约 ${signal.symbol} 距离上次交易不足5分钟，跳过`);
       return;
     }
 
@@ -1308,7 +1310,7 @@ export default function BinanceAutoTrader() {
       };
 
       setTradeRecords((prev) => [trade, ...prev.slice(0, 99)]);
-      setLastSignalTime(now);
+      setLastSignalTimes((prev) => new Map(prev).set(signal.symbol, now));
       setDailyTradesCount((prev) => prev + 1);
     } catch (err: any) {
       console.error("交易执行失败:", err);
@@ -1371,21 +1373,8 @@ export default function BinanceAutoTrader() {
           if (trendSignal) {
             console.log(`[WebSocket] ${symbol} 发现趋势信号: ${trendSignal.direction}`);
 
-            // 检查是否可以执行交易
-            let canExecute = autoTrading;
-            let notExecutedReason = "";
-
-            if (!autoTrading) {
-              notExecutedReason = "自动交易未开启";
-              canExecute = false;
-            } else if (positions.length >= tradingConfig.maxOpenPositions) {
-              notExecutedReason = `已达到最大持仓限制 (${tradingConfig.maxOpenPositions})`;
-              canExecute = false;
-            } else if (dailyTradesCount >= tradingConfig.dailyTradesLimit) {
-              notExecutedReason = `已达到每日交易限制 (${tradingConfig.dailyTradesLimit})`;
-              canExecute = false;
-            }
-
+            // WebSocket只用于显示趋势信号，不执行交易
+            // 完整的信号（15分钟趋势 + 5分钟回调进场）由scanAllSymbols检测并执行
             setSignals((prev) => {
               const lastSignal = prev[0];
               if (
@@ -1396,18 +1385,15 @@ export default function BinanceAutoTrader() {
               ) {
                 return prev;
               }
-              console.log(`[WebSocket] ${symbol} 添加新信号到列表`);
+              console.log(`[WebSocket] ${symbol} 添加趋势信号到列表（仅供参考）`);
               return [{
                 ...trendSignal,
-                executed: canExecute,
-                notExecutedReason: canExecute ? undefined : notExecutedReason
+                confidence: 0.5, // 趋势信号置信度较低
+                reason: `${trendSignal.reason}（仅趋势，等待5分钟回调进场）`,
+                executed: false, // WebSocket检测的趋势信号不执行交易
+                notExecutedReason: "仅趋势信号，等待完整信号（15分钟趋势 + 5分钟回调）"
               }, ...prev.slice(0, 49)];
             });
-
-            if (canExecute) {
-              console.log(`[WebSocket] ${symbol} 执行交易...`);
-              executeTrade(trendSignal);
-            }
           }
         }
 
