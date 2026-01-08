@@ -218,7 +218,10 @@ export default function BinanceAutoTrader() {
     const prefix = type === 'error' ? '❌' : type === 'success' ? '✅' : type === 'warning' ? '⚠️' : 'ℹ️';
     const logMsg = `[${timestamp}] ${prefix} ${msg}`;
     console.log(`[System] ${logMsg}`);
-    setSystemLog(prev => [logMsg, ...prev.slice(0, 49)]);
+    // 使用setTimeout确保状态更新不会被React批量处理优化掉
+    setTimeout(() => {
+      setSystemLog(prev => [logMsg, ...prev.slice(0, 99)]);
+    }, 0);
   };
 
   // 从localStorage加载配置
@@ -240,15 +243,23 @@ export default function BinanceAutoTrader() {
     setScanLog([]);
     const addLog = (msg: string) => {
       const timestamp = new Date().toLocaleTimeString();
-      console.log(`[Scan] [${timestamp}] ${msg}`);
-      setScanLog(prev => [`[${timestamp}] ${msg}`, ...prev.slice(0, 19)]);
+      const logMsg = `[${timestamp}] ${msg}`;
+      console.log(`[Scan] ${logMsg}`);
+      // 使用setTimeout确保状态更新不会被React批量处理优化掉
+      setTimeout(() => {
+        setScanLog(prev => [logMsg, ...prev.slice(0, 99)]);
+      }, 0);
     };
 
     const addDetailLog = (msg: string, level: 'info' | 'success' | 'error' | 'warning' = 'info') => {
       const timestamp = new Date().toLocaleTimeString();
       const prefix = level === 'error' ? '❌' : level === 'success' ? '✅' : level === 'warning' ? '⚠️' : 'ℹ️';
-      console.log(`[Scan] [${timestamp}] ${prefix} ${msg}`);
-      setScanLog(prev => [`[${timestamp}] ${prefix} ${msg}`, ...prev.slice(0, 49)]);
+      const logMsg = `[${timestamp}] ${prefix} ${msg}`;
+      console.log(`[Scan] ${logMsg}`);
+      // 使用setTimeout确保状态更新不会被React批量处理优化掉
+      setTimeout(() => {
+        setScanLog(prev => [logMsg, ...prev.slice(0, 99)]);
+      }, 0);
     };
 
     try {
@@ -2834,6 +2845,81 @@ export default function BinanceAutoTrader() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* 扫描日志 */}
+      {(scanLog.length > 0 || isScanning) && (
+        <div className="bg-gray-800 rounded-lg p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold">🔍 扫描日志</h2>
+            <button
+              onClick={() => setScanLog([])}
+              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm transition"
+            >
+              清空日志
+            </button>
+          </div>
+          <div className="bg-gray-900 rounded-lg p-4 max-h-96 overflow-y-auto font-mono text-xs space-y-1">
+            {scanLog.length === 0 ? (
+              <div className="text-gray-500 text-center py-4">
+                {isScanning ? '⏳ 等待扫描...' : '暂无扫描日志'}
+              </div>
+            ) : (
+              scanLog.map((log, index) => (
+                <div
+                  key={index}
+                  className={`${
+                    log.includes('❌') ? 'text-red-400' :
+                    log.includes('✅') ? 'text-green-400' :
+                    log.includes('⚠️') ? 'text-yellow-400' :
+                    log.includes('🔍') || log.includes('🚀') || log.includes('📊') ? 'text-blue-400' :
+                    log.includes('📡') ? 'text-purple-400' :
+                    'text-gray-300'
+                  }`}
+                >
+                  {log}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 系统日志 */}
+      {(systemLog.length > 0 || isTrading || autoTrading) && (
+        <div className="bg-gray-800 rounded-lg p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold">📝 系统日志</h2>
+            <button
+              onClick={() => setSystemLog([])}
+              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-sm transition"
+            >
+              清空日志
+            </button>
+          </div>
+          <div className="bg-gray-900 rounded-lg p-4 max-h-96 overflow-y-auto font-mono text-xs space-y-1">
+            {systemLog.length === 0 ? (
+              <div className="text-gray-500 text-center py-4">
+                暂无系统日志
+              </div>
+            ) : (
+              systemLog.map((log, index) => (
+                <div
+                  key={index}
+                  className={`${
+                    log.includes('❌') ? 'text-red-400' :
+                    log.includes('✅') ? 'text-green-400' :
+                    log.includes('⚠️') ? 'text-yellow-400' :
+                    log.includes('ℹ️') ? 'text-blue-400' :
+                    'text-gray-300'
+                  }`}
+                >
+                  {log}
+                </div>
+              ))
+            )}
           </div>
         </div>
       )}
