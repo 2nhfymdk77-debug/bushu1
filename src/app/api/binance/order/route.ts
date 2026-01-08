@@ -20,6 +20,7 @@ export async function POST(request: NextRequest) {
       type,
       quantity,
       price,
+      positionSide, // 新增持仓方向参数
       stopLoss,
       takeProfit,
     } = await request.json();
@@ -54,6 +55,11 @@ export async function POST(request: NextRequest) {
       timestamp: timestamp.toString(),
       type,
     };
+
+    // 添加持仓方向（币安期货必需）
+    if (positionSide) {
+      params.positionSide = positionSide;
+    }
 
     // LIMIT订单需要价格
     if (price && type === "LIMIT") {

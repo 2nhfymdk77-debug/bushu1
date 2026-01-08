@@ -721,6 +721,9 @@ export default function BinanceAutoTrader() {
       // 格式化数量
       const formattedQuantity = parseFloat(closeQuantity.toFixed(quantityPrecision));
 
+      // 平仓时positionSide必须与持仓方向一致
+      const closePositionSide = position.positionSide || (isLong ? "LONG" : "SHORT");
+
       // 真实平仓
       const response = await fetch("/api/binance/order", {
         method: "POST",
@@ -732,6 +735,7 @@ export default function BinanceAutoTrader() {
           side,
           type: "MARKET",
           quantity: formattedQuantity,
+          positionSide: closePositionSide,
         }),
       });
 
@@ -816,6 +820,9 @@ export default function BinanceAutoTrader() {
       // 格式化数量
       const formattedQuantity = parseFloat(quantity.toFixed(quantityPrecision));
 
+      // 平仓时positionSide必须与持仓方向一致
+      const closePositionSide = position.positionSide || (isLong ? "LONG" : "SHORT");
+
       // 真实平仓
       const response = await fetch("/api/binance/order", {
         method: "POST",
@@ -827,6 +834,7 @@ export default function BinanceAutoTrader() {
           side,
           type: "MARKET",
           quantity: formattedQuantity,
+          positionSide: closePositionSide,
         }),
       });
 
@@ -1579,6 +1587,11 @@ export default function BinanceAutoTrader() {
 
       const formattedPrice = parseFloat(signal.entryPrice.toFixed(pricePrecision));
 
+      // 币安期货持仓模式：默认双向持仓（Hedge Mode）
+      // positionSide: LONG（做多）或 SHORT（做空）
+      // 单向持仓模式使用 BOTH
+      const positionSide = signal.direction === "long" ? "LONG" : "SHORT";
+
       // 市价单不发送止盈止损参数
       const requestBody: any = {
         apiKey,
@@ -1587,6 +1600,7 @@ export default function BinanceAutoTrader() {
         side,
         type,
         quantity: formattedQuantity,
+        positionSide, // 添加持仓方向参数
       };
 
       // 只有限价单才发送价格
@@ -1600,6 +1614,7 @@ export default function BinanceAutoTrader() {
         type,
         quantity: formattedQuantity,
         price: type === "LIMIT" ? formattedPrice : undefined,
+        positionSide,
         notional: (formattedQuantity * signal.entryPrice).toFixed(2)
       });
 
