@@ -1100,6 +1100,12 @@ export default function BinanceAutoTrader() {
     const volume = data15m[index].volume;
     const volMA = volumeMA[index];
 
+    // 安全检查：确保EMA值存在
+    if (emaS === undefined || emaL === undefined || emaL === 0) {
+      console.log(`[趋势判断] EMA值无效: emaS=${emaS}, emaL=${emaL}`);
+      return "none";
+    }
+
     // 检查趋势距离
     const distance = Math.abs(emaS - emaL) / emaL * 100;
     if (distance < strategyParams.minTrendDistance) {
@@ -1150,6 +1156,17 @@ export default function BinanceAutoTrader() {
     const emaL = emaLong5m[index];
     const rsi = rsi5m[index];
     const rsiPrev = rsi5m[index - 1];
+
+    // 安全检查：确保指标值存在
+    if (emaS === undefined || emaL === undefined || rsi === undefined || rsiPrev === undefined) {
+      console.log(`[5分钟进场] 指标值无效: emaS=${emaS}, emaL=${emaL}, rsi=${rsi}`);
+      return {
+        signal: false,
+        type: trendDirection,
+        reason: "指标计算失败",
+        details: `EMA或RSI值无效`
+      };
+    }
 
     console.log(`[5分钟进场] 趋势: ${trendDirection}, 价格: ${current.close.toFixed(2)}, EMA20: ${emaS.toFixed(2)}, EMA60: ${emaL.toFixed(2)}, RSI: ${rsi.toFixed(1)}`);
 
