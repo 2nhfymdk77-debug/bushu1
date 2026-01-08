@@ -461,9 +461,9 @@ export default function BinanceAutoTrader() {
     }
   };
 
-  // 监听自动扫描开关
+  // 监听自动扫描开关（独立于WebSocket监控）
   useEffect(() => {
-    if (autoScanAll && isTrading && connected && autoTrading) {
+    if (autoScanAll && connected && autoTrading) {
       // 立即执行一次扫描
       scanAllSymbols();
 
@@ -485,7 +485,7 @@ export default function BinanceAutoTrader() {
         clearInterval(scanIntervalRef);
       }
     };
-  }, [autoScanAll, isTrading, connected, autoTrading]);
+  }, [autoScanAll, connected, autoTrading, tradingConfig.scanIntervalMinutes]);
 
   // 检查持仓并自动平仓
   const checkPositionsAndAutoClose = async () => {
@@ -1634,21 +1634,46 @@ export default function BinanceAutoTrader() {
     setDailyTradesCount(0);
   };
 
-  // 开始/停止监控
+  // 开始/停止实时监控（仅WebSocket监控，不执行交易）
   const toggleMonitoring = () => {
     if (isTrading) {
       if (wsRef.current) {
         wsRef.current.close();
       }
       setIsTrading(false);
-      setAutoTrading(false);
+      // 停止监控时不影响自动交易
     } else {
       if (selectedSymbols.length === 0) {
-        setError("请至少选择一个合约");
+        setError("请至少选择一个合约进行实时监控");
         return;
       }
       connectWebSocket();
       setIsTrading(true);
+      addSystemLog("开始实时监控模式（仅监控不交易）", 'info');
+    }
+  };
+
+  // 开启/停止自动交易
+  const toggleAutoTrading = () => {
+    if (autoTrading) {
+      // 停止自动交易
+      setAutoTrading(false);
+      setAutoScanAll(false);
+      addSystemLog("自动交易已停止", 'warning');
+    } else {
+      // 开启自动交易前确认
+      const confirm = window.confirm(
+        "⚠️ 警告：您即将开启自动交易！\n\n这会使用真实资金进行交易。\n\n确定要继续吗？"
+      );
+      if (!confirm) return;
+
+      if (!connected) {
+        setError("请先连接币安账户");
+        return;
+      }
+
+      setAutoTrading(true);
+      addSystemLog("自动交易已开启，等待扫描触发", 'success');
     }
   };
 
@@ -2544,17 +2569,20 @@ export default function BinanceAutoTrader() {
       {/* 控制面板 */}
       {connected && (
         <div className="bg-gray-800 rounded-lg p-6">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-bold mb-2">交易控制</h2>
-              <div className="text-sm text-gray-400">
-                监控 {selectedSymbols.length} 个合约 | 实盘交易 | 币安主网
+          <h2 className="text-xl font-bold mb-4">交易控制</h2>
+
+          {/* 实时监控控制 */}
+          <div className="mb-6 p-4 bg-blue-900/20 rounded-lg">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="font-bold text-blue-400 mb-1">📊 实时监控（仅查看行情）</h3>
+                <div className="text-xs text-blue-300">
+                  WebSocket实时推送选定合约的K线数据和趋势信号，<strong>不执行交易</strong>
+                </div>
               </div>
-            </div>
-            <div className="flex items-center gap-4">
               <button
                 onClick={toggleMonitoring}
-                className={`px-6 py-2 rounded font-medium transition ${
+                className={`px-4 py-2 rounded font-medium transition ${
                   isTrading
                     ? "bg-red-600 hover:bg-red-700"
                     : "bg-green-600 hover:bg-green-700"
@@ -2562,214 +2590,167 @@ export default function BinanceAutoTrader() {
               >
                 {isTrading ? "停止监控" : "开始监控"}
               </button>
-
-              {isTrading && (
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={autoTrading}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        const confirm = window.confirm(
-                          "⚠️ 警告：您即将开启自动交易！\n\n这会使用真实资金进行交易。\n\n确定要继续吗？"
-                        );
-                        if (!confirm) return;
-                      }
-                      setAutoTrading(e.target.checked);
-                    }}
-                    className="w-4 h-4"
-                  />
-                  <span className={`text-sm ${autoTrading ? "text-green-500 font-bold" : "text-gray-300"}`}>
-                    自动交易
-                  </span>
-                </label>
-              )}
             </div>
-          </div>
-
-          {isTrading && (
-            <div className="mt-4 p-4 bg-gray-700 rounded-lg">
+            {isTrading && (
               <div className="flex items-center gap-2 text-green-500">
                 <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                <span className="font-bold">正在监控</span>
+                <span className="text-sm">正在监控 {selectedSymbols.length} 个合约</span>
               </div>
-              <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                <div>
-                  <span className="text-gray-400">今日交易: </span>
-                  <span className="text-white">{dailyTradesCount}/{tradingConfig.dailyTradesLimit}</span>
+            )}
+          </div>
+
+          {/* 自动交易控制 */}
+          <div className="p-4 bg-green-900/20 rounded-lg">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="font-bold text-green-400 mb-1">🚀 自动交易（自动下单）</h3>
+                <div className="text-xs text-green-300">
+                  自动扫描热门合约，发现交易信号后自动执行开仓和平仓
                 </div>
+              </div>
+              <button
+                onClick={toggleAutoTrading}
+                className={`px-4 py-2 rounded font-medium transition ${
+                  autoTrading
+                    ? "bg-red-600 hover:bg-red-700"
+                    : "bg-blue-600 hover:bg-blue-700"
+                }`}
+              >
+                {autoTrading ? "停止自动交易" : "开启自动交易"}
+              </button>
+            </div>
+            {autoTrading && (
+              <div className="flex items-center gap-2 text-green-500">
+                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                <span className="text-sm">自动交易已开启，等待扫描触发</span>
+              </div>
+            )}
+          </div>
+
+          {/* 状态显示 */}
+          {(isTrading || autoTrading) && (
+            <div className="mt-4 p-4 bg-gray-700 rounded-lg">
+              <div className="font-bold text-white mb-2">运行状态</div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                 <div>
-                  <span className="text-gray-400">当前持仓: </span>
-                  <span className="text-white">{positions.length}/{tradingConfig.maxOpenPositions}</span>
-                </div>
-                <div>
-                  <span className="text-gray-400">自动交易: </span>
-                  <span className={autoTrading ? "text-green-500" : "text-gray-500"}>
-                    {autoTrading ? "开启" : "关闭"}
+                  <span className="text-gray-400">实时监控:</span>
+                  <span className={isTrading ? "text-green-500 ml-1" : "text-gray-500 ml-1"}>
+                    {isTrading ? "运行中" : "未启动"}
                   </span>
                 </div>
                 <div>
-                  <span className="text-gray-400">运行时间: </span>
-                  <span className="text-white">{new Date().toLocaleTimeString()}</span>
+                  <span className="text-gray-400">自动交易:</span>
+                  <span className={autoTrading ? "text-green-500 ml-1" : "text-gray-500 ml-1"}>
+                    {autoTrading ? "运行中" : "未启动"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-400">今日交易:</span>
+                  <span className="text-white ml-1">
+                    {dailyTradesCount}/{tradingConfig.dailyTradesLimit}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-gray-400">当前持仓:</span>
+                  <span className="text-white ml-1">
+                    {positions.length}/{tradingConfig.maxOpenPositions}
+                  </span>
                 </div>
               </div>
 
               {/* 自动扫描控制 */}
-              <div className="mt-4 pt-4 border-t border-gray-600">
-                <div className="flex items-center justify-between flex-wrap gap-3">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={autoScanAll}
-                      onChange={(e) => setAutoScanAll(e.target.checked)}
-                      disabled={!autoTrading}
-                      className="w-4 h-4"
-                    />
-                    <span className={`text-sm ${autoScanAll ? "text-green-500 font-bold" : "text-gray-300"}`}>
-                      🚀 自动扫描并交易 (每5分钟)
-                    </span>
-                  </label>
+              {autoTrading && (
+                <div className="mt-4 pt-4 border-t border-gray-600">
+                  <div className="flex items-center justify-between flex-wrap gap-3">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={autoScanAll}
+                        onChange={(e) => setAutoScanAll(e.target.checked)}
+                        className="w-4 h-4"
+                      />
+                      <span className={`text-sm ${autoScanAll ? "text-green-500 font-bold" : "text-gray-300"}`}>
+                        🚀 自动扫描并交易 (每{tradingConfig.scanIntervalMinutes < 60 ? `${tradingConfig.scanIntervalMinutes}分钟` : `${tradingConfig.scanIntervalMinutes / 60}小时`})
+                      </span>
+                    </label>
 
-                  {dailyTradesCount > 0 && (
-                    <button
-                      onClick={resetDailyTradesCount}
-                      className="px-4 py-1 bg-yellow-600 hover:bg-yellow-700 rounded text-sm transition"
-                    >
-                      重置交易计数器
-                    </button>
-                  )}
-                </div>
-
-                {autoScanAll && (
-                  <div className="mt-3 p-3 bg-green-900/20 rounded text-sm text-green-300">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="font-bold">🎯 自动交易规则:</div>
+                    {dailyTradesCount > 0 && (
                       <button
-                        onClick={scanAllSymbols}
-                        disabled={isScanning || !connected}
-                        className={`px-3 py-1 rounded text-sm transition ${
-                          isScanning
-                            ? 'bg-gray-600 cursor-not-allowed'
-                            : 'bg-green-600 hover:bg-green-700'
-                        }`}
+                        onClick={resetDailyTradesCount}
+                        className="px-4 py-1 bg-yellow-600 hover:bg-yellow-700 rounded text-sm transition"
                       >
-                        {isScanning ? '扫描中...' : '立即扫描'}
+                        重置交易计数器
                       </button>
-                    </div>
-
-                    {/* 扫描间隔配置 */}
-                    <div className="mb-3 p-2 bg-green-800/30 rounded">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="font-bold">⏱️ 扫描间隔时间:</span>
-                        <select
-                          value={tradingConfig.scanIntervalMinutes}
-                          onChange={(e) =>
-                            setTradingConfig({
-                              ...tradingConfig,
-                              scanIntervalMinutes: Number(e.target.value)
-                            })
-                          }
-                          className="bg-gray-700 text-white px-2 py-1 rounded text-sm"
-                        >
-                          <option value={1}>1 分钟（高频扫描）</option>
-                          <option value={5}>5 分钟（默认）</option>
-                          <option value={15}>15 分钟</option>
-                          <option value={30}>30 分钟</option>
-                          <option value={60}>1 小时</option>
-                          <option value={240}>4 小时</option>
-                        </select>
-                      </div>
-                      <div className="text-xs text-green-200/70">
-                        💡 提示：扫描间隔越短，发现交易机会的速度越快，但API请求频率也会增加。建议根据策略频率选择合适的时间间隔。
-                      </div>
-                    </div>
-
-                    <ul className="list-disc list-inside text-xs space-y-1">
-                      <li><strong>扫描范围：</strong>24h成交量最高的前10个USDT合约</li>
-                      <li><strong>执行频率：</strong>每{tradingConfig.scanIntervalMinutes < 60 ? `${tradingConfig.scanIntervalMinutes}分钟` : `${tradingConfig.scanIntervalMinutes / 60}小时`}自动扫描一次，也可手动触发</li>
-                      <li><strong>交易限制：</strong>
-                        <ul className="list-decimal list-inside ml-4 mt-1 space-y-1">
-                          <li>持仓数量：当前 {positions.length}/{tradingConfig.maxOpenPositions}</li>
-                          <li>每日交易：今日 {dailyTradesCount}/{tradingConfig.dailyTradesLimit}</li>
-                        </ul>
-                      </li>
-                      <li><strong>筛选条件：</strong>15分钟趋势 + 5分钟回调进场（需满足2/4条件）</li>
-                      <li><strong>交易执行：</strong>发现符合条件的信号后自动开仓</li>
-                    </ul>
-                    <div className="mt-3 p-2 bg-green-800/30 rounded text-xs text-green-200">
-                      ✅ 此模式下无需手动选择合约，系统会自动发现交易机会
-                    </div>
+                    )}
                   </div>
-                )}
 
-                {!autoScanAll && (
-                  <div className="mt-3 p-3 bg-yellow-900/20 rounded text-sm text-yellow-300">
-                    <div className="font-bold mb-2">⚠️ 当前为手动监控模式</div>
-                    <ul className="list-disc list-inside text-xs space-y-1">
-                      <li>仅监控上方已选择的 {selectedSymbols.length} 个合约</li>
-                      <li>实时推送K线数据和显示趋势信号</li>
-                      <li><strong>不执行任何交易</strong>（仅用于观察和分析）</li>
-                      <li>如需自动交易，请开启上方"自动扫描并交易"开关</li>
-                    </ul>
-                  </div>
-                )}
-
-                {scanProgress && (
-                  <div className="mt-2 text-sm text-blue-400 animate-pulse">
-                    {scanProgress}
-                  </div>
-                )}
-                {/* 扫描日志 */}
-                {scanLog.length > 0 && (
-                  <div className="mt-3 bg-gray-900 rounded-lg p-3">
-                    <div className="text-xs text-gray-400 mb-2 flex items-center justify-between">
-                      <span>扫描日志</span>
-                      <span className="text-gray-500">({scanLog.length} 条)</span>
-                    </div>
-                    <div className="space-y-1 max-h-60 overflow-y-auto text-xs font-mono">
-                      {scanLog.map((log, index) => (
-                        <div
-                          key={index}
-                          className={`${
-                            log.includes('🎯') ? 'text-yellow-400' :
-                            log.includes('✅') ? 'text-green-400' :
-                            log.includes('❌') ? 'text-red-400' :
-                            log.includes('⚠️') ? 'text-orange-400' :
-                            log.includes('📊') || log.includes('🔍') ? 'text-blue-400' :
-                            'text-gray-300'
+                  {autoScanAll && (
+                    <div className="mt-3 p-3 bg-green-900/20 rounded text-sm text-green-300">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="font-bold">🎯 自动交易规则:</div>
+                        <button
+                          onClick={scanAllSymbols}
+                          disabled={isScanning || !connected}
+                          className={`px-3 py-1 rounded text-sm transition ${
+                            isScanning
+                              ? 'bg-gray-600 cursor-not-allowed'
+                              : 'bg-green-600 hover:bg-green-700'
                           }`}
                         >
-                          {log}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* 系统日志 */}
-              {systemLog.length > 0 && (
-                <div className="mt-4 bg-gray-900 rounded-lg p-3">
-                  <div className="text-xs text-gray-400 mb-2 flex items-center justify-between">
-                    <span>系统日志</span>
-                    <span className="text-gray-500">({systemLog.length} 条)</span>
-                  </div>
-                  <div className="space-y-1 max-h-60 overflow-y-auto text-xs font-mono">
-                    {systemLog.map((log, index) => (
-                      <div
-                        key={index}
-                        className={`${
-                          log.includes('✅') ? 'text-green-400' :
-                          log.includes('❌') ? 'text-red-400' :
-                          log.includes('⚠️') ? 'text-orange-400' :
-                          log.includes('ℹ️') ? 'text-blue-400' :
-                          'text-gray-300'
-                        }`}
-                      >
-                        {log}
+                          {isScanning ? '扫描中...' : '立即扫描'}
+                        </button>
                       </div>
-                    ))}
-                  </div>
+
+                      {/* 扫描间隔配置 */}
+                      <div className="mb-3 p-2 bg-green-800/30 rounded">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="font-bold">⏱️ 扫描间隔时间:</span>
+                          <select
+                            value={tradingConfig.scanIntervalMinutes}
+                            onChange={(e) =>
+                              setTradingConfig({
+                                ...tradingConfig,
+                                scanIntervalMinutes: Number(e.target.value)
+                              })
+                            }
+                            className="bg-gray-700 text-white px-2 py-1 rounded text-sm"
+                          >
+                            <option value={1}>1 分钟（高频扫描）</option>
+                            <option value={5}>5 分钟（默认）</option>
+                            <option value={15}>15 分钟</option>
+                            <option value={30}>30 分钟</option>
+                            <option value={60}>1 小时</option>
+                            <option value={240}>4 小时</option>
+                          </select>
+                        </div>
+                        <div className="text-xs text-green-200/70">
+                          💡 提示：扫描间隔越短，发现交易机会的速度越快，但API请求频率也会增加。建议根据策略频率选择合适的时间间隔。
+                        </div>
+                      </div>
+
+                      <ul className="list-disc list-inside text-xs space-y-1">
+                        <li><strong>扫描范围：</strong>24h成交量最高的前10个USDT合约</li>
+                        <li><strong>执行频率：</strong>每{tradingConfig.scanIntervalMinutes < 60 ? `${tradingConfig.scanIntervalMinutes}分钟` : `${tradingConfig.scanIntervalMinutes / 60}小时`}自动扫描一次，也可手动触发</li>
+                        <li><strong>交易限制：</strong>
+                          <ul className="list-decimal list-inside ml-4 mt-1 space-y-1">
+                            <li>持仓数量：当前 {positions.length}/{tradingConfig.maxOpenPositions}</li>
+                            <li>每日交易：今日 {dailyTradesCount}/{tradingConfig.dailyTradesLimit}</li>
+                          </ul>
+                        </li>
+                        <li><strong>筛选条件：</strong>15分钟趋势 + 5分钟回调进场（需满足2/4条件）</li>
+                        <li><strong>交易执行：</strong>发现符合条件的信号后自动开仓</li>
+                      </ul>
+                      <div className="mt-3 p-2 bg-green-800/30 rounded text-xs text-green-200">
+                        ✅ 此模式下无需手动选择合约，系统会自动发现交易机会
+                      </div>
+                    </div>
+                  )}
+
+                  {scanProgress && (
+                    <div className="mt-2 text-sm text-blue-400 animate-pulse">
+                      {scanProgress}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
