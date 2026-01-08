@@ -1147,12 +1147,6 @@ export default function BinanceAutoTrader() {
           </div>
         </div>
       )}
-
-      {/* 回测工具 */}
-      <div className="bg-gray-800 rounded-lg p-6">
-        <h2 className="text-xl font-bold mb-4">策略回测</h2>
-        <CryptoBacktestTool />
-      </div>
     </div>
   );
 }
