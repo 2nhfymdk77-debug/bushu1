@@ -94,6 +94,7 @@ interface Position {
   };
   trailingStopPrice?: number; // 当前移动止损价格
   stopLossBreakeven?: boolean; // 止损是否已移动到保本价
+  openTime?: number; // 开仓时间
 }
 
 interface Order {
@@ -126,6 +127,24 @@ interface TradeRecord {
   status: "FILLED" | "PARTIALLY_FILLED" | "PENDING" | "FAILED";
   orderId?: number;
   pnl?: number;
+}
+
+// 完整的交易记录（开仓+平仓）
+interface CompletedTrade {
+  id: string;
+  symbol: string;
+  positionSide: string; // LONG 或 SHORT
+  openTime: number;
+  closeTime: number;
+  entryPrice: number;
+  exitPrice: number;
+  quantity: number;
+  leverage: number;
+  pnl: number;
+  pnlPercent: number; // 盈亏百分比（相对于名义价值）
+  closeReason: string; // 止损/止盈1/止盈2/反向信号/手动平仓
+  direction: "long" | "short";
+  notional: number; // 名义价值
 }
 
 interface Signal {
@@ -206,6 +225,7 @@ export default function BinanceAutoTrader() {
   const [scanProgress, setScanProgress] = useState("");
   const [signals, setSignals] = useState<Signal[]>([]);
   const [tradeRecords, setTradeRecords] = useState<TradeRecord[]>([]);
+  const [completedTrades, setCompletedTrades] = useState<CompletedTrade[]>([]); // 完整的交易记录（开仓+平仓）
   const [strategyParams, setStrategyParams] = useState<StrategyParams>(DEFAULT_PARAMS);
   const [tradingConfig, setTradingConfig] = useState<TradingConfig>(DEFAULT_TRADING_CONFIG);
   const [klineData, setKlineData] = useState<Map<string, KLineData[]>>(new Map());
@@ -786,6 +806,27 @@ export default function BinanceAutoTrader() {
 
       setTradeRecords((prev) => [closeTrade, ...prev.slice(0, 99)]);
 
+      // 创建部分平仓的交易记录
+      const partialPnl = position.unRealizedProfit * percent;
+      const completedTrade: CompletedTrade = {
+        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        symbol: position.symbol,
+        positionSide: position.positionSide,
+        openTime: position.openTime || Date.now() - 3600000, // 使用真实开仓时间，如果没有则估算
+        closeTime: Date.now(),
+        entryPrice: position.entryPrice,
+        exitPrice: position.markPrice,
+        quantity: formattedQuantity,
+        leverage: position.leverage,
+        pnl: partialPnl,
+        pnlPercent: partialPnl / (Math.abs(position.notional) * percent) * 100,
+        closeReason: reason,
+        direction: position.positionSide === 'LONG' ? 'long' : 'short',
+        notional: position.notional * percent,
+      };
+
+      setCompletedTrades((prev) => [completedTrade, ...prev.slice(0, 199)]);
+
       // 更新止盈执行状态和持仓数量
       setPositions((prev) =>
         prev.map((p) => {
@@ -882,6 +923,27 @@ export default function BinanceAutoTrader() {
       };
 
       setTradeRecords((prev) => [closeTrade, ...prev.slice(0, 99)]);
+
+      // 创建完整的交易记录（开仓+平仓）
+      const completedTrade: CompletedTrade = {
+        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        symbol: position.symbol,
+        positionSide: position.positionSide,
+        openTime: position.openTime || Date.now() - 3600000, // 使用真实开仓时间，如果没有则估算
+        closeTime: Date.now(),
+        entryPrice: position.entryPrice,
+        exitPrice: position.markPrice,
+        quantity: formattedQuantity,
+        leverage: position.leverage,
+        pnl: position.unRealizedProfit,
+        pnlPercent: position.unRealizedProfit / Math.abs(position.notional) * 100,
+        closeReason: reason,
+        direction: position.positionSide === 'LONG' ? 'long' : 'short',
+        notional: position.notional,
+      };
+
+      setCompletedTrades((prev) => [completedTrade, ...prev.slice(0, 199)]);
+
       console.log(`平仓成功: ${position.symbol} 原因: ${reason} 盈亏: ${position.unRealizedProfit.toFixed(2)} USDT`);
 
       // 立即刷新持仓信息，确保状态同步（不调用 checkPositionsAndAutoClose，避免重复触发）
@@ -1086,11 +1148,15 @@ export default function BinanceAutoTrader() {
       if (positionsResponse.ok) {
         const positionsData = await positionsResponse.json();
 
-        // 保留现有的 takeProfitExecuted 状态，避免重置止盈记录
+        // 保留现有的 takeProfitExecuted 和 openTime 状态
         const existingTpExecuted = new Map<string, { r1: boolean; r2: boolean; r3: boolean }>();
+        const existingOpenTimes = new Map<string, number>(); // 保存现有持仓的开仓时间
         positions.forEach(p => {
           if (p.takeProfitExecuted && p.positionAmt !== 0) {
             existingTpExecuted.set(`${p.symbol}_${p.positionSide}`, p.takeProfitExecuted);
+          }
+          if (p.openTime && p.positionAmt !== 0) {
+            existingOpenTimes.set(`${p.symbol}_${p.positionSide}`, p.openTime);
           }
         });
 
@@ -1098,6 +1164,11 @@ export default function BinanceAutoTrader() {
         const initializedPositions = positionsData.map((p: Position) => {
           const key = `${p.symbol}_${p.positionSide}`;
           const existingTp = existingTpExecuted.get(key);
+          const existingOpenTime = existingOpenTimes.get(key);
+
+          // 如果是新持仓（没有记录过openTime），设置当前时间为开仓时间
+          const isOpeningNewPosition = !existingOpenTime && p.positionAmt !== 0;
+
           return {
             ...p,
             highestPrice: p.highestPrice || p.entryPrice,
@@ -1105,6 +1176,7 @@ export default function BinanceAutoTrader() {
             takeProfitExecuted: existingTp || p.takeProfitExecuted || { r1: false, r2: false, r3: false },
             trailingStopPrice: p.trailingStopPrice,
             stopLossBreakeven: p.stopLossBreakeven || false,
+            openTime: existingOpenTime || p.openTime || Date.now(), // 保留已有openTime或使用当前时间
           };
         });
 
@@ -2068,6 +2140,18 @@ export default function BinanceAutoTrader() {
 
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleString("zh-CN");
+  };
+
+  const formatDuration = (ms: number) => {
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if (days > 0) return `${days}天${hours % 24}小时`;
+    if (hours > 0) return `${hours}小时${minutes % 60}分钟`;
+    if (minutes > 0) return `${minutes}分钟${seconds % 60}秒`;
+    return `${seconds}秒`;
   };
 
   const formatNumber = (num: number, decimals: number = 2) => {
@@ -3488,6 +3572,162 @@ export default function BinanceAutoTrader() {
                           }
                         >
                           {trade.status === "FILLED" ? "已成交" : trade.status === "FAILED" ? "失败" : "待成交"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* 盈亏记录 */}
+      {completedTrades.length > 0 && (
+        <div className="bg-gray-800 rounded-lg p-6">
+          <h2 className="text-xl font-bold mb-4">盈亏记录</h2>
+
+          {/* 盈亏汇总 */}
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
+            <div className="bg-gray-700 rounded-lg p-4">
+              <div className="text-gray-400 text-sm mb-1">总盈亏</div>
+              <div className={`text-2xl font-bold ${completedTrades.reduce((sum, t) => sum + t.pnl, 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                {completedTrades.reduce((sum, t) => sum + t.pnl, 0).toFixed(2)} USDT
+              </div>
+            </div>
+            <div className="bg-gray-700 rounded-lg p-4">
+              <div className="text-gray-400 text-sm mb-1">交易次数</div>
+              <div className="text-2xl font-bold">{completedTrades.length}</div>
+            </div>
+            <div className="bg-gray-700 rounded-lg p-4">
+              <div className="text-gray-400 text-sm mb-1">胜率</div>
+              <div className="text-2xl font-bold text-blue-400">
+                {((completedTrades.filter(t => t.pnl > 0).length / completedTrades.length) * 100).toFixed(1)}%
+              </div>
+            </div>
+            <div className="bg-gray-700 rounded-lg p-4">
+              <div className="text-gray-400 text-sm mb-1">盈利次数</div>
+              <div className="text-2xl font-bold text-green-500">
+                {completedTrades.filter(t => t.pnl > 0).length}
+              </div>
+            </div>
+            <div className="bg-gray-700 rounded-lg p-4">
+              <div className="text-gray-400 text-sm mb-1">亏损次数</div>
+              <div className="text-2xl font-bold text-red-500">
+                {completedTrades.filter(t => t.pnl < 0).length}
+              </div>
+            </div>
+            <div className="bg-gray-700 rounded-lg p-4">
+              <div className="text-gray-400 text-sm mb-1">平均盈亏</div>
+              <div className="text-2xl font-bold">
+                {(completedTrades.reduce((sum, t) => sum + t.pnl, 0) / completedTrades.length).toFixed(2)} USDT
+              </div>
+            </div>
+            <div className="bg-gray-700 rounded-lg p-4">
+              <div className="text-gray-400 text-sm mb-1">最大盈利</div>
+              <div className="text-2xl font-bold text-green-500">
+                {Math.max(...completedTrades.map(t => t.pnl)).toFixed(2)} USDT
+              </div>
+            </div>
+            <div className="bg-gray-700 rounded-lg p-4">
+              <div className="text-gray-400 text-sm mb-1">最大亏损</div>
+              <div className="text-2xl font-bold text-red-500">
+                {Math.min(...completedTrades.map(t => t.pnl)).toFixed(2)} USDT
+              </div>
+            </div>
+            <div className="bg-gray-700 rounded-lg p-4">
+              <div className="text-gray-400 text-sm mb-1">盈利平均</div>
+              <div className="text-2xl font-bold text-green-500">
+                {(completedTrades.filter(t => t.pnl > 0).reduce((sum, t) => sum + t.pnl, 0) / Math.max(1, completedTrades.filter(t => t.pnl > 0).length)).toFixed(2)} USDT
+              </div>
+            </div>
+            <div className="bg-gray-700 rounded-lg p-4">
+              <div className="text-gray-400 text-sm mb-1">亏损平均</div>
+              <div className="text-2xl font-bold text-red-500">
+                {(completedTrades.filter(t => t.pnl < 0).reduce((sum, t) => sum + t.pnl, 0) / Math.max(1, completedTrades.filter(t => t.pnl < 0).length)).toFixed(2)} USDT
+              </div>
+            </div>
+            <div className="bg-gray-700 rounded-lg p-4">
+              <div className="text-gray-400 text-sm mb-1">盈亏比</div>
+              <div className="text-2xl font-bold text-blue-400">
+                {
+                  completedTrades.filter(t => t.pnl > 0).length > 0 && completedTrades.filter(t => t.pnl < 0).length > 0
+                    ? (completedTrades.filter(t => t.pnl > 0).reduce((sum, t) => sum + t.pnl, 0) / Math.max(1, completedTrades.filter(t => t.pnl > 0).length) /
+                        Math.abs(completedTrades.filter(t => t.pnl < 0).reduce((sum, t) => sum + t.pnl, 0) / Math.max(1, completedTrades.filter(t => t.pnl < 0).length))).toFixed(2)
+                    : "-"
+                }
+              </div>
+            </div>
+            <div className="bg-gray-700 rounded-lg p-4">
+              <div className="text-gray-400 text-sm mb-1">总名义价值</div>
+              <div className="text-2xl font-bold">
+                {completedTrades.reduce((sum, t) => sum + t.notional, 0).toFixed(2)} USDT
+              </div>
+            </div>
+          </div>
+
+          {/* 盈亏记录表格 */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-700">
+                <tr>
+                  <th className="px-3 py-2 text-left">平仓时间</th>
+                  <th className="px-3 py-2 text-left">合约</th>
+                  <th className="px-3 py-2 text-left">方向</th>
+                  <th className="px-3 py-2 text-left">杠杆</th>
+                  <th className="px-3 py-2 text-left">开仓价格</th>
+                  <th className="px-3 py-2 text-left">平仓价格</th>
+                  <th className="px-3 py-2 text-left">数量</th>
+                  <th className="px-3 py-2 text-left">名义价值</th>
+                  <th className="px-3 py-2 text-left">盈亏</th>
+                  <th className="px-3 py-2 text-left">盈亏%</th>
+                  <th className="px-3 py-2 text-left">持仓时长</th>
+                  <th className="px-3 py-2 text-left">平仓原因</th>
+                </tr>
+              </thead>
+              <tbody>
+                {completedTrades.map((trade) => {
+                  // 获取合约精度信息
+                  const symbolInfo = symbols.find(s => s.symbol === trade.symbol);
+                  const pricePrecision = symbolInfo?.pricePrecision ?? 2;
+                  const quantityPrecision = symbolInfo?.quantityPrecision ?? 4;
+
+                  return (
+                    <tr key={trade.id} className="border-t border-gray-700">
+                      <td className="px-3 py-2">{formatTime(trade.closeTime)}</td>
+                      <td className="px-3 py-2 font-bold">{trade.symbol}</td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={`px-2 py-1 rounded text-xs ${
+                            trade.direction === "long" ? "bg-green-600" : "bg-red-600"
+                          }`}
+                        >
+                          {trade.direction === "long" ? "多头" : "空头"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">{trade.leverage}x</td>
+                      <td className="px-3 py-2">{trade.entryPrice.toFixed(pricePrecision)}</td>
+                      <td className="px-3 py-2">{trade.exitPrice.toFixed(pricePrecision)}</td>
+                      <td className="px-3 py-2">{trade.quantity.toFixed(quantityPrecision)}</td>
+                      <td className="px-3 py-2">{trade.notional.toFixed(2)}</td>
+                      <td className={`px-3 py-2 font-bold ${trade.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                        {trade.pnl >= 0 ? '+' : ''}{trade.pnl.toFixed(2)}
+                      </td>
+                      <td className={`px-3 py-2 ${trade.pnlPercent >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                        {trade.pnlPercent >= 0 ? '+' : ''}{trade.pnlPercent.toFixed(2)}%
+                      </td>
+                      <td className="px-3 py-2 text-gray-300">
+                        {formatDuration(trade.closeTime - trade.openTime)}
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <span className={`px-2 py-1 rounded ${
+                          trade.closeReason.includes('止损') ? 'bg-red-700' :
+                          trade.closeReason.includes('止盈') ? 'bg-green-700' :
+                          trade.closeReason.includes('反向') ? 'bg-yellow-700' :
+                          'bg-gray-600'
+                        }`}>
+                          {trade.closeReason}
                         </span>
                       </td>
                     </tr>
