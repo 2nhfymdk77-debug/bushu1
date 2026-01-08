@@ -97,6 +97,8 @@ interface Signal {
   reason: string;
   confidence: number;
   entryPrice: number;
+  executed?: boolean;
+  notExecutedReason?: string;
 }
 
 interface TradingConfig {
@@ -189,12 +191,25 @@ export default function BinanceAutoTrader() {
       setScanProgress(`正在扫描 ${usdtTickers.length} 个热门合约...`);
 
       // 对每个合约进行信号检测
-      let foundSignal = false;
-      const maxCheckSymbols = Math.min(usdtTickers.length, 10); // 每次最多检查10个,避免请求过多
+      let signalsFound = 0;
+      let tradesExecuted = 0;
+      const maxCheckSymbols = Math.min(usdtTickers.length, 15); // 每次最多检查15个
 
       for (let i = 0; i < maxCheckSymbols; i++) {
         const symbol = usdtTickers[i];
-        setScanProgress(`正在扫描 ${i + 1}/${maxCheckSymbols}: ${symbol}`);
+        setScanProgress(`正在扫描 ${i + 1}/${maxCheckSymbols}: ${symbol} (已交易: ${tradesExecuted})`);
+
+        // 检查是否达到持仓数量限制
+        if (positions.length >= tradingConfig.maxOpenPositions) {
+          console.log(`已达到最大持仓数量限制 (${tradingConfig.maxOpenPositions})，停止开新仓位`);
+          setScanProgress(`已达到最大持仓限制 (${tradingConfig.maxOpenPositions})，继续扫描中...`);
+        }
+
+        // 检查是否达到每日交易次数限制
+        if (dailyTradesCount >= tradingConfig.dailyTradesLimit) {
+          console.log(`已达到每日交易限制 (${tradingConfig.dailyTradesLimit})，停止开新仓位`);
+          setScanProgress(`已达到每日交易限制 (${tradingConfig.dailyTradesLimit})，继续扫描中...`);
+        }
 
         // 获取K线数据
         try {
@@ -219,6 +234,23 @@ export default function BinanceAutoTrader() {
           if (klines.length >= strategyParams.emaLong + 10) {
             const signal = checkSignals(symbol, klines);
             if (signal) {
+              signalsFound++;
+
+              // 检查是否可以执行交易
+              let canExecute = autoTrading;
+              let notExecutedReason = "";
+
+              if (!autoTrading) {
+                notExecutedReason = "自动交易未开启";
+                canExecute = false;
+              } else if (positions.length >= tradingConfig.maxOpenPositions) {
+                notExecutedReason = `已达到最大持仓限制 (${tradingConfig.maxOpenPositions})`;
+                canExecute = false;
+              } else if (dailyTradesCount >= tradingConfig.dailyTradesLimit) {
+                notExecutedReason = `已达到每日交易限制 (${tradingConfig.dailyTradesLimit})`;
+                canExecute = false;
+              }
+
               // 添加到信号列表
               setSignals((prev) => {
                 const exists = prev.some(s =>
@@ -227,16 +259,19 @@ export default function BinanceAutoTrader() {
                   Date.now() - s.time < 300000
                 );
                 if (!exists) {
-                  return [signal, ...prev.slice(0, 49)];
+                  return [{
+                    ...signal,
+                    executed: canExecute,
+                    notExecutedReason: canExecute ? undefined : notExecutedReason
+                  }, ...prev.slice(0, 49)];
                 }
                 return prev;
               });
 
-              // 执行交易
-              if (autoTrading) {
+              // 执行交易（仅在未达到限制时）
+              if (canExecute) {
                 await executeTrade(signal);
-                foundSignal = true;
-                break; // 找到一个信号后停止扫描,避免同时交易多个
+                tradesExecuted++;
               }
             }
           }
@@ -248,7 +283,7 @@ export default function BinanceAutoTrader() {
         await new Promise(resolve => setTimeout(resolve, 200));
       }
 
-      setScanProgress(foundSignal ? "扫描完成,发现交易信号" : "扫描完成,暂无交易信号");
+      setScanProgress(`扫描完成: 发现 ${signalsFound} 个信号, 执行 ${tradesExecuted} 笔交易`);
 
       // 5秒后清除扫描状态
       setTimeout(() => setScanProgress(""), 5000);
@@ -677,6 +712,21 @@ export default function BinanceAutoTrader() {
       if (symbolData.length >= strategyParams.emaLong + 10) {
         const signal = checkSignals(symbol, [...symbolData, kline].slice(-200));
         if (signal) {
+          // 检查是否可以执行交易
+          let canExecute = autoTrading;
+          let notExecutedReason = "";
+
+          if (!autoTrading) {
+            notExecutedReason = "自动交易未开启";
+            canExecute = false;
+          } else if (positions.length >= tradingConfig.maxOpenPositions) {
+            notExecutedReason = `已达到最大持仓限制 (${tradingConfig.maxOpenPositions})`;
+            canExecute = false;
+          } else if (dailyTradesCount >= tradingConfig.dailyTradesLimit) {
+            notExecutedReason = `已达到每日交易限制 (${tradingConfig.dailyTradesLimit})`;
+            canExecute = false;
+          }
+
           setSignals((prev) => {
             const lastSignal = prev[0];
             if (
@@ -687,10 +737,14 @@ export default function BinanceAutoTrader() {
             ) {
               return prev;
             }
-            return [signal, ...prev.slice(0, 49)];
+            return [{
+              ...signal,
+              executed: canExecute,
+              notExecutedReason: canExecute ? undefined : notExecutedReason
+            }, ...prev.slice(0, 49)];
           });
 
-          if (autoTrading) {
+          if (canExecute) {
             executeTrade(signal);
           }
         }
@@ -986,7 +1040,10 @@ export default function BinanceAutoTrader() {
           <h2 className="text-xl font-bold mb-4">交易参数配置</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm text-gray-400 mb-1">单笔仓位比例 (%)</label>
+              <label className="block text-sm text-gray-400 mb-1">
+                单笔仓位比例 (%)
+                <span className="text-xs text-gray-500 ml-2">每笔交易占可用余额的比例</span>
+              </label>
               <input
                 type="number"
                 value={tradingConfig.positionSizePercent}
@@ -994,10 +1051,18 @@ export default function BinanceAutoTrader() {
                   setTradingConfig({ ...tradingConfig, positionSizePercent: Number(e.target.value) })
                 }
                 className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                min="1"
+                max="100"
               />
+              <div className="text-xs text-gray-500 mt-1">
+                最大可用余额: {accountBalance ? `${(accountBalance.available * tradingConfig.positionSizePercent / 100).toFixed(2)} USDT` : '-'}
+              </div>
             </div>
             <div>
-              <label className="block text-sm text-gray-400 mb-1">最大持仓数量</label>
+              <label className="block text-sm text-gray-400 mb-1">
+                最大持仓数量
+                <span className="text-xs text-gray-500 ml-2">同时持有的最大仓位数</span>
+              </label>
               <input
                 type="number"
                 value={tradingConfig.maxOpenPositions}
@@ -1005,7 +1070,11 @@ export default function BinanceAutoTrader() {
                   setTradingConfig({ ...tradingConfig, maxOpenPositions: Number(e.target.value) })
                 }
                 className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                min="1"
               />
+              <div className="text-xs text-gray-500 mt-1">
+                当前持仓: <span className={positions.length >= tradingConfig.maxOpenPositions ? "text-red-500 font-bold" : "text-green-500"}>{positions.length}/{tradingConfig.maxOpenPositions}</span>
+              </div>
             </div>
             <div>
               <label className="block text-sm text-gray-400 mb-1">止损比例 (%)</label>
@@ -1221,6 +1290,19 @@ export default function BinanceAutoTrader() {
                   )}
                 </div>
 
+                {autoScanAll && (
+                  <div className="mt-3 p-3 bg-blue-900/20 rounded text-sm text-blue-300">
+                    <div className="font-bold mb-1">扫描规则:</div>
+                    <ul className="list-disc list-inside text-xs space-y-1">
+                      <li>自动扫描24h成交量最高的前20个合约</li>
+                      <li>每5分钟扫描一次，最多检查15个合约</li>
+                      <li>持仓数量未达限制时继续开仓 (当前: {positions.length}/{tradingConfig.maxOpenPositions})</li>
+                      <li>每日交易次数未达限制时继续交易 (今日: {dailyTradesCount}/{tradingConfig.dailyTradesLimit})</li>
+                      <li>发现信号但达到限制时，仍会继续扫描以发现新信号</li>
+                    </ul>
+                  </div>
+                )}
+
                 {scanProgress && (
                   <div className="mt-2 text-sm text-blue-400 animate-pulse">
                     {scanProgress}
@@ -1256,6 +1338,15 @@ export default function BinanceAutoTrader() {
                       {signal.direction === "long" ? "做多" : "做空"}
                     </span>
                     <span className="font-bold text-lg">{signal.symbol}</span>
+                    {signal.executed !== undefined && (
+                      <span
+                        className={`px-2 py-1 rounded text-xs font-bold ${
+                          signal.executed ? "bg-blue-600" : "bg-orange-600"
+                        }`}
+                      >
+                        {signal.executed ? "已执行" : "未执行"}
+                      </span>
+                    )}
                   </div>
                   <div className="text-right">
                     <div className="text-lg font-bold">{formatNumber(signal.entryPrice, 2)}</div>
@@ -1263,6 +1354,11 @@ export default function BinanceAutoTrader() {
                   </div>
                 </div>
                 <div className="mt-2 text-sm text-gray-300">{signal.reason}</div>
+                {signal.notExecutedReason && (
+                  <div className="mt-1 text-xs text-orange-400">
+                    ⚠️ {signal.notExecutedReason}
+                  </div>
+                )}
                 <div className="mt-2 flex items-center gap-2">
                   <span className="text-sm text-gray-400">置信度:</span>
                   <div className="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
