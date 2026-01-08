@@ -207,6 +207,7 @@ export default function BinanceAutoTrader() {
   const [isScanning, setIsScanning] = useState(false);
   const [scanLog, setScanLog] = useState<string[]>([]);
   const [systemLog, setSystemLog] = useState<string[]>([]); // 系统日志（交易、WebSocket、系统事件）
+  const [customIntervalMinutes, setCustomIntervalMinutes] = useState(5); // 自定义间隔时间（分钟）
 
   const wsRef = useRef<WebSocket | null>(null);
   const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -2741,18 +2742,90 @@ export default function BinanceAutoTrader() {
                                 scanIntervalMinutes: Number(e.target.value)
                               })
                             }
-                            className="bg-gray-700 text-white px-2 py-1 rounded text-sm"
+                            className="bg-gray-700 text-white px-2 py-1 rounded text-sm flex-1 max-w-48"
                           >
-                            <option value={1}>1 分钟（高频扫描）</option>
-                            <option value={5}>5 分钟（默认）</option>
+                            <option value={1/60}>1 秒（极速）</option>
+                            <option value={5/60}>5 秒</option>
+                            <option value={10/60}>10 秒</option>
+                            <option value={30/60}>30 秒</option>
+                            <option value={1}>1 分钟（高频）</option>
+                            <option value={2}>2 分钟</option>
+                            <option value={3}>3 分钟</option>
+                            <option value={5}>5 分钟（推荐）</option>
+                            <option value={10}>10 分钟</option>
                             <option value={15}>15 分钟</option>
                             <option value={30}>30 分钟</option>
                             <option value={60}>1 小时</option>
                             <option value={240}>4 小时</option>
+                            <option value={-1}>自定义...</option>
                           </select>
                         </div>
-                        <div className="text-xs text-green-200/70">
-                          💡 提示：扫描间隔越短，发现交易机会的速度越快，但API请求频率也会增加。建议根据策略频率选择合适的时间间隔。
+
+                        {/* 自定义输入 */}
+                        {tradingConfig.scanIntervalMinutes === -1 && (
+                          <div className="mt-2 flex items-center gap-2">
+                            <input
+                              type="number"
+                              min="0.1"
+                              step="0.1"
+                              placeholder="输入秒数"
+                              value={(customIntervalMinutes * 60).toFixed(1)}
+                              onChange={(e) => {
+                                const seconds = parseFloat(e.target.value);
+                                if (seconds >= 0.1) {
+                                  setCustomIntervalMinutes(seconds / 60);
+                                }
+                              }}
+                              className="bg-gray-700 text-white px-2 py-1 rounded text-sm flex-1"
+                            />
+                            <span className="text-xs text-gray-400">秒</span>
+                            <button
+                              onClick={() => {
+                                if (customIntervalMinutes >= 1/60) {
+                                  setTradingConfig({
+                                    ...tradingConfig,
+                                    scanIntervalMinutes: customIntervalMinutes
+                                  });
+                                }
+                              }}
+                              disabled={customIntervalMinutes < 1/60}
+                              className="px-3 py-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded text-sm transition"
+                            >
+                              应用
+                            </button>
+                          </div>
+                        )}
+
+                        {/* 高频警告 */}
+                        {tradingConfig.scanIntervalMinutes < 1 && tradingConfig.scanIntervalMinutes !== -1 && (
+                          <div className="mt-2 p-2 bg-red-900/50 border border-red-600 rounded text-xs text-red-200 animate-pulse">
+                            🚨 <strong>高风险警告：</strong>
+                            您设置了{(tradingConfig.scanIntervalMinutes * 60).toFixed(0)}秒的超高频扫描间隔！
+                            <br />
+                            <strong>后果：</strong>
+                            - API速率限制（每秒限制请求数）
+                            - - 币安可能封禁API密钥
+                            - - 消耗大量配额
+                            <br />
+                            <strong>建议：</strong>仅用于测试，生产环境请使用1分钟以上间隔
+                          </div>
+                        )}
+
+                        <div className="mt-2 p-2 bg-green-900/30 rounded text-xs text-green-200/90">
+                          💡 <strong>当前间隔：</strong>
+                          {tradingConfig.scanIntervalMinutes === -1 ? (
+                            <span>自定义模式</span>
+                          ) : tradingConfig.scanIntervalMinutes < 1 ? (
+                            <span className={tradingConfig.scanIntervalMinutes < 10/60 ? "text-red-300 font-bold" : "text-yellow-300"}>
+                              {(tradingConfig.scanIntervalMinutes * 60).toFixed(0)} 秒
+                            </span>
+                          ) : tradingConfig.scanIntervalMinutes < 60 ? (
+                            <span>{tradingConfig.scanIntervalMinutes} 分钟</span>
+                          ) : (
+                            <span>{tradingConfig.scanIntervalMinutes / 60} 小时</span>
+                          )}
+                          <br />
+                          ⚠️ 扫描间隔越短，API请求频率越高。1分钟以下间隔可能触发<strong>速率限制</strong>。
                         </div>
                       </div>
 
