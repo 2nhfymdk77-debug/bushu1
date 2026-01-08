@@ -108,6 +108,12 @@ interface TradingConfig {
   takeProfitPercent: number;
   maxDailyLoss: number;
   dailyTradesLimit: number;
+  // 自动平仓配置
+  autoStopLoss: boolean;
+  autoTakeProfit: boolean;
+  reverseSignalClose: boolean;
+  trailingStop: boolean;
+  trailingStopPercent: number;
 }
 
 const DEFAULT_TRADING_CONFIG: TradingConfig = {
@@ -117,6 +123,12 @@ const DEFAULT_TRADING_CONFIG: TradingConfig = {
   takeProfitPercent: 1.0,
   maxDailyLoss: 5,
   dailyTradesLimit: 10,
+  // 默认开启自动止损止盈和反向信号平仓
+  autoStopLoss: true,
+  autoTakeProfit: true,
+  reverseSignalClose: true,
+  trailingStop: false,
+  trailingStopPercent: 0.3,
 };
 
 export default function BinanceAutoTrader() {
@@ -317,6 +329,126 @@ export default function BinanceAutoTrader() {
     };
   }, [autoScanAll, isTrading, connected, autoTrading]);
 
+  // 检查持仓并自动平仓
+  const checkPositionsAndAutoClose = async () => {
+    if (!autoTrading || !connected || positions.length === 0) return;
+
+    for (const position of positions) {
+      if (position.positionAmt === 0) continue;
+
+      const symbol = position.symbol;
+      const isLong = position.positionAmt > 0;
+      const currentPrice = position.markPrice;
+      const entryPrice = position.entryPrice;
+      const pnl = position.unRealizedProfit;
+
+      // 1. 自动止损
+      if (tradingConfig.autoStopLoss) {
+        const stopLossPrice = isLong
+          ? entryPrice * (1 - tradingConfig.stopLossPercent / 100)
+          : entryPrice * (1 + tradingConfig.stopLossPercent / 100);
+
+        const hitStopLoss = isLong
+          ? currentPrice <= stopLossPrice
+          : currentPrice >= stopLossPrice;
+
+        if (hitStopLoss) {
+          console.log(`触发止损: ${symbol} 价格: ${currentPrice.toFixed(2)} 止损价: ${stopLossPrice.toFixed(2)}`);
+          await executeAutoClose(position, "止损触发");
+          continue;
+        }
+      }
+
+      // 2. 自动止盈
+      if (tradingConfig.autoTakeProfit) {
+        const takeProfitPrice = isLong
+          ? entryPrice * (1 + tradingConfig.takeProfitPercent / 100)
+          : entryPrice * (1 - tradingConfig.takeProfitPercent / 100);
+
+        const hitTakeProfit = isLong
+          ? currentPrice >= takeProfitPrice
+          : currentPrice <= takeProfitPrice;
+
+        if (hitTakeProfit) {
+          console.log(`触发达盈: ${symbol} 价格: ${currentPrice.toFixed(2)} 止盈价: ${takeProfitPrice.toFixed(2)}`);
+          await executeAutoClose(position, "止盈触发");
+          continue;
+        }
+      }
+
+      // 3. 反向信号平仓
+      if (tradingConfig.reverseSignalClose) {
+        const symbolData = klineData.get(symbol);
+        if (symbolData && symbolData.length >= strategyParams.emaLong + 10) {
+          const signal = checkSignals(symbol, symbolData);
+
+          if (signal) {
+            // 检测到反向信号
+            const isReverseSignal = (isLong && signal.direction === "short") ||
+                                   (!isLong && signal.direction === "long");
+
+            if (isReverseSignal) {
+              console.log(`反向信号平仓: ${symbol} 持仓方向: ${isLong ? "多头" : "空头"} 信号: ${signal.direction}`);
+              await executeAutoClose(position, `反向信号: ${signal.direction}`);
+              continue;
+            }
+          }
+        }
+      }
+    }
+  };
+
+  // 执行自动平仓
+  const executeAutoClose = async (position: Position, reason: string) => {
+    if (!connected || !apiKey || !apiSecret) return;
+
+    try {
+      const isLong = position.positionAmt > 0;
+      const side = isLong ? "SELL" : "BUY";
+      const quantity = Math.abs(position.positionAmt);
+
+      if (!testMode) {
+        // 真实平仓
+        const response = await fetch("/api/binance/order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            apiKey,
+            apiSecret,
+            testnet,
+            symbol: position.symbol,
+            side,
+            type: "MARKET",
+            quantity: quantity.toFixed(3),
+          }),
+        });
+
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.error || "平仓失败");
+        }
+      }
+
+      // 记录平仓交易
+      const closeTrade: TradeRecord = {
+        id: Date.now().toString(),
+        symbol: position.symbol,
+        side,
+        type: "MARKET",
+        quantity,
+        price: position.markPrice,
+        time: Date.now(),
+        status: "FILLED",
+      };
+
+      setTradeRecords((prev) => [closeTrade, ...prev.slice(0, 99)]);
+      console.log(`平仓成功: ${position.symbol} 原因: ${reason} 盈亏: ${position.unRealizedProfit.toFixed(2)} USDT`);
+    } catch (err: any) {
+      console.error(`自动平仓失败: ${position.symbol}`, err);
+      setError(`自动平仓失败: ${err.message}`);
+    }
+  };
+
   // 每日重置交易计数
   useEffect(() => {
     const resetDailyTrades = () => {
@@ -432,6 +564,9 @@ export default function BinanceAutoTrader() {
       if (positionsResponse.ok) {
         const positionsData = await positionsResponse.json();
         setPositions(positionsData);
+
+        // 检查持仓并自动平仓
+        await checkPositionsAndAutoClose();
       }
 
       // 获取订单
@@ -952,6 +1087,71 @@ export default function BinanceAutoTrader() {
               </p>
             </div>
           </div>
+
+          <div className="mt-6 pt-6 border-t border-gray-700">
+            <h3 className="text-lg font-bold mb-4">自动平仓管理</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={tradingConfig.autoStopLoss}
+                    onChange={(e) =>
+                      setTradingConfig({ ...tradingConfig, autoStopLoss: e.target.checked })
+                    }
+                    className="w-4 h-4"
+                  />
+                  <span className="text-sm text-gray-300">自动止损</span>
+                </label>
+                <div className="text-xs text-gray-500 mt-1">
+                  价格达到止损位时自动平仓
+                </div>
+              </div>
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={tradingConfig.autoTakeProfit}
+                    onChange={(e) =>
+                      setTradingConfig({ ...tradingConfig, autoTakeProfit: e.target.checked })
+                    }
+                    className="w-4 h-4"
+                  />
+                  <span className="text-sm text-gray-300">自动止盈</span>
+                </label>
+                <div className="text-xs text-gray-500 mt-1">
+                  价格达到止盈位时自动平仓
+                </div>
+              </div>
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={tradingConfig.reverseSignalClose}
+                    onChange={(e) =>
+                      setTradingConfig({ ...tradingConfig, reverseSignalClose: e.target.checked })
+                    }
+                    className="w-4 h-4"
+                  />
+                  <span className="text-sm text-gray-300">反向信号平仓</span>
+                </label>
+                <div className="text-xs text-gray-500 mt-1">
+                  出现反向信号时自动平仓
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 p-4 bg-blue-900/20 rounded">
+              <h4 className="font-bold text-blue-400 mb-2">自动平仓说明</h4>
+              <ul className="text-xs text-gray-300 space-y-1 list-disc list-inside">
+                <li><span className="text-green-400">自动止损</span>: 当持仓亏损达到设定比例时自动平仓，避免更大损失</li>
+                <li><span className="text-green-400">自动止盈</span>: 当持仓盈利达到设定比例时自动平仓，锁定利润</li>
+                <li><span className="text-green-400">反向信号平仓</span>: 当策略检测到与当前持仓相反的信号时自动平仓，及时止损或转换方向</li>
+                <li>每5秒自动检查一次持仓，触发条件立即执行平仓</li>
+                <li>可在持仓卡片中查看当前价格与止损止盈价的距离</li>
+              </ul>
+            </div>
+          </div>
         </div>
       )}
 
@@ -968,30 +1168,44 @@ export default function BinanceAutoTrader() {
                   <th className="px-3 py-2 text-left">数量</th>
                   <th className="px-3 py-2 text-left">入场价</th>
                   <th className="px-3 py-2 text-left">标记价</th>
+                  <th className="px-3 py-2 text-left">止损价</th>
+                  <th className="px-3 py-2 text-left">止盈价</th>
                   <th className="px-3 py-2 text-left">未实现盈亏</th>
                   <th className="px-3 py-2 text-left">杠杆</th>
                 </tr>
               </thead>
               <tbody>
-                {positions.map((pos, index) => (
-                  <tr key={index} className="border-t border-gray-700">
-                    <td className="px-3 py-2 font-bold">{pos.symbol}</td>
-                    <td className="px-3 py-2">
-                      <span className={`px-2 py-1 rounded text-xs ${
-                        pos.positionAmt > 0 ? "bg-green-600" : "bg-red-600"
-                      }`}>
-                        {pos.positionAmt > 0 ? "做多" : "做空"}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2">{Math.abs(pos.positionAmt).toFixed(4)}</td>
-                    <td className="px-3 py-2">{pos.entryPrice.toFixed(2)}</td>
-                    <td className="px-3 py-2">{pos.markPrice.toFixed(2)}</td>
-                    <td className={`px-3 py-2 font-semibold ${pos.unRealizedProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
-                      {pos.unRealizedProfit >= 0 ? "+" : ""}{pos.unRealizedProfit.toFixed(2)} USDT
-                    </td>
-                    <td className="px-3 py-2">{pos.leverage}x</td>
-                  </tr>
-                ))}
+                {positions.map((pos, index) => {
+                  const isLong = pos.positionAmt > 0;
+                  const stopLossPrice = isLong
+                    ? pos.entryPrice * (1 - tradingConfig.stopLossPercent / 100)
+                    : pos.entryPrice * (1 + tradingConfig.stopLossPercent / 100);
+                  const takeProfitPrice = isLong
+                    ? pos.entryPrice * (1 + tradingConfig.takeProfitPercent / 100)
+                    : pos.entryPrice * (1 - tradingConfig.takeProfitPercent / 100);
+
+                  return (
+                    <tr key={index} className="border-t border-gray-700">
+                      <td className="px-3 py-2 font-bold">{pos.symbol}</td>
+                      <td className="px-3 py-2">
+                        <span className={`px-2 py-1 rounded text-xs ${
+                          pos.positionAmt > 0 ? "bg-green-600" : "bg-red-600"
+                        }`}>
+                          {pos.positionAmt > 0 ? "做多" : "做空"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">{Math.abs(pos.positionAmt).toFixed(4)}</td>
+                      <td className="px-3 py-2">{pos.entryPrice.toFixed(2)}</td>
+                      <td className="px-3 py-2">{pos.markPrice.toFixed(2)}</td>
+                      <td className="px-3 py-2 text-red-400">{stopLossPrice.toFixed(2)}</td>
+                      <td className="px-3 py-2 text-green-400">{takeProfitPrice.toFixed(2)}</td>
+                      <td className={`px-3 py-2 font-semibold ${pos.unRealizedProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
+                        {pos.unRealizedProfit >= 0 ? "+" : ""}{pos.unRealizedProfit.toFixed(2)} USDT
+                      </td>
+                      <td className="px-3 py-2">{pos.leverage}x</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1186,6 +1400,71 @@ export default function BinanceAutoTrader() {
                   className="w-full bg-gray-700 rounded px-3 py-2 text-white"
                 />
               </div>
+            </div>
+          </div>
+
+          <div className="mt-6 pt-6 border-t border-gray-700">
+            <h3 className="text-lg font-bold mb-4">自动平仓管理</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={tradingConfig.autoStopLoss}
+                    onChange={(e) =>
+                      setTradingConfig({ ...tradingConfig, autoStopLoss: e.target.checked })
+                    }
+                    className="w-4 h-4"
+                  />
+                  <span className="text-sm text-gray-300">自动止损</span>
+                </label>
+                <div className="text-xs text-gray-500 mt-1">
+                  价格达到止损位时自动平仓
+                </div>
+              </div>
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={tradingConfig.autoTakeProfit}
+                    onChange={(e) =>
+                      setTradingConfig({ ...tradingConfig, autoTakeProfit: e.target.checked })
+                    }
+                    className="w-4 h-4"
+                  />
+                  <span className="text-sm text-gray-300">自动止盈</span>
+                </label>
+                <div className="text-xs text-gray-500 mt-1">
+                  价格达到止盈位时自动平仓
+                </div>
+              </div>
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={tradingConfig.reverseSignalClose}
+                    onChange={(e) =>
+                      setTradingConfig({ ...tradingConfig, reverseSignalClose: e.target.checked })
+                    }
+                    className="w-4 h-4"
+                  />
+                  <span className="text-sm text-gray-300">反向信号平仓</span>
+                </label>
+                <div className="text-xs text-gray-500 mt-1">
+                  出现反向信号时自动平仓
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 p-4 bg-blue-900/20 rounded">
+              <h4 className="font-bold text-blue-400 mb-2">自动平仓说明</h4>
+              <ul className="text-xs text-gray-300 space-y-1 list-disc list-inside">
+                <li><span className="text-green-400">自动止损</span>: 当持仓亏损达到设定比例时自动平仓，避免更大损失</li>
+                <li><span className="text-green-400">自动止盈</span>: 当持仓盈利达到设定比例时自动平仓，锁定利润</li>
+                <li><span className="text-green-400">反向信号平仓</span>: 当策略检测到与当前持仓相反的信号时自动平仓，及时止损或转换方向</li>
+                <li>每5秒自动检查一次持仓，触发条件立即执行平仓</li>
+                <li>可在持仓卡片中查看当前价格与止损止盈价的距离</li>
+              </ul>
             </div>
           </div>
         </div>
