@@ -23,6 +23,7 @@ interface StrategyParams {
   leverage: number;
   riskPercent: number;
   minTrendDistance: number;
+  contractPoolSize: number; // 合约池数量
   // 筛选条件开关和阈值
   enableTrendDistanceFilter: boolean;
   enableRSIFilter: boolean;
@@ -47,6 +48,7 @@ const DEFAULT_PARAMS: StrategyParams = {
   leverage: 3,
   riskPercent: 2,
   minTrendDistance: 0.05, // 降低最小趋势距离（0.15% -> 0.05%）
+  contractPoolSize: 500, // 合约池数量（默认500个）
   // 筛选条件开关和阈值（默认全部开启）
   enableTrendDistanceFilter: true,
   enableRSIFilter: true,
@@ -295,11 +297,11 @@ export default function BinanceAutoTrader() {
       const tickers = await tickerResponse.json();
       addLog(`✅ 获取到 ${tickers.length} 个合约`);
 
-      // 按成交量排序,取前50个USDT合约作为合约池（支持轮询切换）
+      // 按成交量排序,取前N个USDT合约作为合约池（N由用户配置，支持轮询切换）
       const newContractPool = tickers
         .filter((t: any) => t.symbol.endsWith("USDT") && parseFloat(t.quoteVolume) > 10000000)
         .sort((a: any, b: any) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-        .slice(0, 50)
+        .slice(0, strategyParams.contractPoolSize)
         .map((t: any) => t.symbol);
 
       // 如果合约池更新了，重置批次索引
@@ -2378,10 +2380,10 @@ export default function BinanceAutoTrader() {
             <div>
               <h2 className="text-lg font-bold text-green-400">自动扫描模式已启用</h2>
               <div className="text-sm text-green-300 mt-2">
-                系统将自动扫描24h成交量最高的前10个合约，发现交易信号后自动执行交易。
+                系统将自动扫描24h成交量最高的前{strategyParams.contractPoolSize}个合约（每批10个，轮询切换），发现交易信号后自动执行交易。
               </div>
               <div className="text-xs text-green-200/70 mt-2">
-                • 无需手动选择合约 • 每5分钟自动扫描 • 自动执行符合条件的交易
+                • 无需手动选择合约 • 批量轮询扫描 • 自动执行符合条件的交易
               </div>
               <div className="mt-3 text-xs text-gray-400">
                 💡 如需手动监控特定合约的图表，请关闭"自动扫描所有合约"开关
@@ -2561,6 +2563,26 @@ export default function BinanceAutoTrader() {
                   }
                   className="w-full bg-gray-700 rounded px-3 py-2 text-white"
                 />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">合约池数量</label>
+                <input
+                  type="number"
+                  step="10"
+                  min="10"
+                  max="1000"
+                  value={strategyParams.contractPoolSize}
+                  onChange={(e) =>
+                    setStrategyParams({
+                      ...strategyParams,
+                      contractPoolSize: Math.min(1000, Math.max(10, Number(e.target.value)))
+                    })
+                  }
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                />
+                <div className="text-xs text-gray-500 mt-1">
+                  自动扫描时使用的合约数量 (10-1000, 默认500)
+                </div>
               </div>
             </div>
           </div>
