@@ -1125,23 +1125,23 @@ export default function BinanceAutoTrader() {
       return "none";
     }
 
-    // 简化多头条件：只需要EMA多头排列且价格在EMA20上方
+    // 简化多头条件：只需要EMA多头排列且价格在EMA${strategyParams.emaShort}上方
     const bullish = emaS > emaL && close > emaS;
     if (bullish) {
-      console.log(`[趋势判断] 多头条件满足: EMA20(${emaS.toFixed(2)}) > EMA60(${emaL.toFixed(2)}), 价格(${close.toFixed(2)}) > EMA20`);
+      console.log(`[趋势判断] 多头条件满足: EMA${strategyParams.emaShort}(${emaS.toFixed(2)}) > EMA${strategyParams.emaLong}(${emaL.toFixed(2)}), 价格(${close.toFixed(2)}) > EMA${strategyParams.emaShort}`);
       // 可选：检查最近3根K线是否跌破EMA60（宽松版本移除此检查）
       return "long";
     }
 
-    // 简化空头条件：只需要EMA空头排列且价格在EMA20下方
+    // 简化空头条件：只需要EMA空头排列且价格在EMA${strategyParams.emaShort}下方
     const bearish = emaS < emaL && close < emaS;
     if (bearish) {
-      console.log(`[趋势判断] 空头条件满足: EMA20(${emaS.toFixed(2)}) < EMA60(${emaL.toFixed(2)}), 价格(${close.toFixed(2)}) < EMA20`);
+      console.log(`[趋势判断] 空头条件满足: EMA${strategyParams.emaShort}(${emaS.toFixed(2)}) < EMA${strategyParams.emaLong}(${emaL.toFixed(2)}), 价格(${close.toFixed(2)}) < EMA${strategyParams.emaShort}`);
       // 可选：检查最近3根K线是否突破EMA60（宽松版本移除此检查）
       return "short";
     }
 
-    console.log(`[趋势判断] 趋势不明确: EMA20=${emaS.toFixed(2)}, EMA60=${emaL.toFixed(2)}, 价格=${close.toFixed(2)}`);
+    console.log(`[趋势判断] 趋势不明确: EMA${strategyParams.emaShort}=${emaS.toFixed(2)}, EMA${strategyParams.emaLong}=${emaL.toFixed(2)}, 价格=${close.toFixed(2)}`);
     return "none";
   };
 
@@ -1180,15 +1180,15 @@ export default function BinanceAutoTrader() {
       };
     }
 
-    console.log(`[5分钟进场] 趋势: ${trendDirection}, 价格: ${current.close.toFixed(2)}, EMA20: ${emaS.toFixed(2)}, EMA60: ${emaL.toFixed(2)}, RSI: ${rsi.toFixed(1)}`);
+    console.log(`[5分钟进场] 趋势: ${trendDirection}, 价格: ${current.close.toFixed(2)}, EMA${strategyParams.emaShort}: ${emaS.toFixed(2)}, EMA${strategyParams.emaLong}: ${emaL.toFixed(2)}, RSI: ${rsi.toFixed(1)}`);
 
     const failedChecks: string[] = [];
 
     if (trendDirection === "long") {
-      // 优化后的做多条件：价格在EMA20上方且满足以下任一条件
+      // 优化后的做多条件：价格在EMA${strategyParams.emaShort}上方且满足以下任一条件
       const priceAboveEMA = current.close > emaS;
       if (strategyParams.enablePriceEMAFilter && !priceAboveEMA) {
-        failedChecks.push(`价格${current.close.toFixed(2)}不在EMA20(${emaS.toFixed(2)})上方`);
+        failedChecks.push(`价格${current.close.toFixed(2)}不在EMA${strategyParams.emaShort}(${emaS.toFixed(2)})上方`);
       }
 
       // 条件1：RSI从超卖区反弹（RSI < 阈值 且 RSI上升）
@@ -1201,10 +1201,10 @@ export default function BinanceAutoTrader() {
         }
       }
 
-      // 条件2：最近N根K线有回踩（价格曾触及EMA20）
+      // 条件2：最近N根K线有回踩（价格曾触及EMA${strategyParams.emaShort}）
       const touchedEma = prev.low <= emaS || prev2.low <= emaS;
       if (strategyParams.enableTouchedEmaFilter && !touchedEma) {
-        failedChecks.push(`最近${strategyParams.emaTouchLookback}根K线未触及EMA20(${prev2.low.toFixed(2)}, ${prev.low.toFixed(2)} > ${emaS.toFixed(2)})`);
+        failedChecks.push(`最近${strategyParams.emaTouchLookback}根K线未触及EMA${strategyParams.emaShort}(${prev2.low.toFixed(2)}, ${prev.low.toFixed(2)} > ${emaS.toFixed(2)})`);
       }
 
       // 条件3：阳线确认（当前K线收阳且涨幅 > 0.1%）
@@ -1234,7 +1234,7 @@ export default function BinanceAutoTrader() {
           signal: true,
           type: "long",
           reason: `多头进场（${passedConditions}/4条件满足）`,
-          details: `价格:${current.close.toFixed(2)}, RSI:${rsi.toFixed(1)}, EMA20:${emaS.toFixed(2)}`
+          details: `价格:${current.close.toFixed(2)}, RSI:${rsi.toFixed(1)}, EMA${strategyParams.emaShort}:${emaS.toFixed(2)}`
         };
       } else {
         console.log(`[5分钟进场] ❌ 多头未触发 (${passedConditions}/4条件)`);
@@ -1246,10 +1246,10 @@ export default function BinanceAutoTrader() {
         };
       }
     } else {
-      // 优化后的做空条件：价格在EMA20下方且满足以下任一条件
+      // 优化后的做空条件：价格在EMA${strategyParams.emaShort}下方且满足以下任一条件
       const priceBelowEMA = current.close < emaS;
       if (strategyParams.enablePriceEMAFilter && !priceBelowEMA) {
-        failedChecks.push(`价格${current.close.toFixed(2)}不在EMA20(${emaS.toFixed(2)})下方`);
+        failedChecks.push(`价格${current.close.toFixed(2)}不在EMA${strategyParams.emaShort}(${emaS.toFixed(2)})下方`);
       }
 
       // 条件1：RSI从超买区回落（RSI > 阈值 且 RSI下降）
@@ -1262,10 +1262,10 @@ export default function BinanceAutoTrader() {
         }
       }
 
-      // 条件2：最近3根K线有反弹（价格曾触及EMA20）
+      // 条件2：最近3根K线有反弹（价格曾触及EMA${strategyParams.emaShort}）
       const touchedEma = prev.high >= emaS || prev2.high >= emaS;
       if (strategyParams.enableTouchedEmaFilter && !touchedEma) {
-        failedChecks.push(`最近3根K线未触及EMA20(${prev2.high.toFixed(2)}, ${prev.high.toFixed(2)} < ${emaS.toFixed(2)})`);
+        failedChecks.push(`最近3根K线未触及EMA${strategyParams.emaShort}(${prev2.high.toFixed(2)}, ${prev.high.toFixed(2)} < ${emaS.toFixed(2)})`);
       }
 
       // 条件3：阴线确认（当前K线收阴且跌幅 > 0.1%）
@@ -1295,7 +1295,7 @@ export default function BinanceAutoTrader() {
           signal: true,
           type: "short",
           reason: `空头进场（${passedConditions}/4条件满足）`,
-          details: `价格:${current.close.toFixed(2)}, RSI:${rsi.toFixed(1)}, EMA20:${emaS.toFixed(2)}`
+          details: `价格:${current.close.toFixed(2)}, RSI:${rsi.toFixed(1)}, EMA${strategyParams.emaShort}:${emaS.toFixed(2)}`
         };
       } else {
         console.log(`[5分钟进场] ❌ 空头未触发 (${passedConditions}/4条件)`);
@@ -2335,8 +2335,8 @@ export default function BinanceAutoTrader() {
                   <span className="text-sm text-gray-300">价格与EMA关系</span>
                 </label>
                 <div className="text-xs text-gray-500 ml-6">
-                  <div>多头: 价格 {'>'} EMA20</div>
-                  <div>空头: 价格 {'<'} EMA20</div>
+                  <div>多头: 价格 {'>'} EMA{strategyParams.emaShort}</div>
+                  <div>空头: 价格 {'<'} EMA{strategyParams.emaShort}</div>
                 </div>
               </div>
 
@@ -2393,8 +2393,8 @@ export default function BinanceAutoTrader() {
                   <span className="text-sm text-gray-300">EMA回踩/反弹检测</span>
                 </label>
                 <div className="text-xs text-gray-500 ml-6 space-y-1">
-                  <div>多头: 最近N根触及EMA20下方</div>
-                  <div>空头: 最近N根触及EMA20上方</div>
+                  <div>多头: 最近N根触及EMA{strategyParams.emaShort}下方</div>
+                  <div>空头: 最近N根触及EMA{strategyParams.emaShort}上方</div>
                   {strategyParams.enableTouchedEmaFilter && (
                     <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-600">
                       <span>K线数量:</span>
