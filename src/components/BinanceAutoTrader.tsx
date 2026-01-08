@@ -1627,17 +1627,11 @@ export default function BinanceAutoTrader() {
         positionSide, // 添加持仓方向参数
       };
 
-      // 只有限价单才发送价格
-      if (type === "LIMIT") {
-        requestBody.price = formattedPrice;
-      }
-
       console.log('[executeSignal] 下单参数:', {
         symbol: signal.symbol,
         side,
         type,
         quantity: formattedQuantity,
-        price: type === "LIMIT" ? formattedPrice : undefined,
         positionSide,
         notional: (formattedQuantity * signal.entryPrice).toFixed(2)
       });
