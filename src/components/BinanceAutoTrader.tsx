@@ -35,6 +35,7 @@ interface StrategyParams {
   emaTouchLookback: number; // 回踩检测的K线数量（默认3根）
   enableCandleColorFilter: boolean;
   minCandleChangePercent: number;
+  minConditionsRequired: number; // 进场需要满足的最少条件数（默认2）
 }
 
 const DEFAULT_PARAMS: StrategyParams = {
@@ -60,6 +61,7 @@ const DEFAULT_PARAMS: StrategyParams = {
   emaTouchLookback: 3, // 回踩检测的K线数量
   enableCandleColorFilter: true,
   minCandleChangePercent: 0.1,
+  minConditionsRequired: 2, // 进场需要满足的最少条件数（默认2个）
 };
 
 interface FuturesSymbol {
@@ -1306,28 +1308,38 @@ export default function BinanceAutoTrader() {
 
       console.log(`[5分钟进场 多头] 价格>EMA: ${priceAboveEMA}, RSI反弹: ${rsiRecovery}, 回踩: ${touchedEma}, 阳线: ${bullishCandle}, 失败检查: [${failedChecks.join(', ')}]`);
 
-      // 只需要满足任意2个条件即可
+      // 计算满足的条件数（关闭的条件自动视为已满足）
       let passedConditions = 0;
       if (!strategyParams.enablePriceEMAFilter || priceAboveEMA) passedConditions++;
       if (!strategyParams.enableRSIFilter || rsiRecovery) passedConditions++;
       if (!strategyParams.enableTouchedEmaFilter || touchedEma) passedConditions++;
       if (!strategyParams.enableCandleColorFilter || bullishCandle) passedConditions++;
 
-      if (passedConditions >= 2) {
-        console.log(`[5分钟进场] ✅ 多头信号触发 (${passedConditions}/4条件)`);
+      // 动态计算开启的条件数量
+      const enabledConditionsCount = [
+        strategyParams.enablePriceEMAFilter,
+        strategyParams.enableRSIFilter,
+        strategyParams.enableTouchedEmaFilter,
+        strategyParams.enableCandleColorFilter
+      ].filter(Boolean).length || 4; // 如果全部关闭，默认为4个条件
+
+      const minRequired = Math.min(strategyParams.minConditionsRequired, enabledConditionsCount);
+
+      if (passedConditions >= minRequired) {
+        console.log(`[5分钟进场] ✅ 多头信号触发 (${passedConditions}/${enabledConditionsCount}条件, 需要${minRequired}个)`);
         return {
           signal: true,
           type: "long",
-          reason: `多头进场（${passedConditions}/4条件满足）`,
+          reason: `多头进场（${passedConditions}/${enabledConditionsCount}条件满足）`,
           details: `价格:${current.close.toFixed(2)}, RSI:${rsi.toFixed(1)}, EMA${strategyParams.emaShort}:${emaS.toFixed(2)}`
         };
       } else {
-        console.log(`[5分钟进场] ❌ 多头未触发 (${passedConditions}/4条件)`);
+        console.log(`[5分钟进场] ❌ 多头未触发 (${passedConditions}/${enabledConditionsCount}条件, 需要${minRequired}个)`);
         return {
           signal: false,
           type: trendDirection,
-          reason: `多头进场未通过 (${passedConditions}/4条件)`,
-          details: `未满足条件: ${failedChecks.length > 0 ? failedChecks.join('; ') : '满足条件不足2个'}`
+          reason: `多头进场未通过 (${passedConditions}/${enabledConditionsCount}条件, 需要${minRequired}个)`,
+          details: `未满足条件: ${failedChecks.length > 0 ? failedChecks.join('; ') : '满足条件不足' + minRequired + '个'}`
         };
       }
     } else {
@@ -1367,28 +1379,38 @@ export default function BinanceAutoTrader() {
 
       console.log(`[5分钟进场 空头] 价格<EMA: ${priceBelowEMA}, RSI回落: ${rsiDecline}, 反弹: ${touchedEma}, 阴线: ${bearishCandle}, 失败检查: [${failedChecks.join(', ')}]`);
 
-      // 只需要满足任意2个条件即可
+      // 计算满足的条件数（关闭的条件自动视为已满足）
       let passedConditions = 0;
       if (!strategyParams.enablePriceEMAFilter || priceBelowEMA) passedConditions++;
       if (!strategyParams.enableRSIFilter || rsiDecline) passedConditions++;
       if (!strategyParams.enableTouchedEmaFilter || touchedEma) passedConditions++;
       if (!strategyParams.enableCandleColorFilter || bearishCandle) passedConditions++;
 
-      if (passedConditions >= 2) {
-        console.log(`[5分钟进场] ✅ 空头信号触发 (${passedConditions}/4条件)`);
+      // 动态计算开启的条件数量
+      const enabledConditionsCount = [
+        strategyParams.enablePriceEMAFilter,
+        strategyParams.enableRSIFilter,
+        strategyParams.enableTouchedEmaFilter,
+        strategyParams.enableCandleColorFilter
+      ].filter(Boolean).length || 4; // 如果全部关闭，默认为4个条件
+
+      const minRequired = Math.min(strategyParams.minConditionsRequired, enabledConditionsCount);
+
+      if (passedConditions >= minRequired) {
+        console.log(`[5分钟进场] ✅ 空头信号触发 (${passedConditions}/${enabledConditionsCount}条件, 需要${minRequired}个)`);
         return {
           signal: true,
           type: "short",
-          reason: `空头进场（${passedConditions}/4条件满足）`,
+          reason: `空头进场（${passedConditions}/${enabledConditionsCount}条件满足）`,
           details: `价格:${current.close.toFixed(2)}, RSI:${rsi.toFixed(1)}, EMA${strategyParams.emaShort}:${emaS.toFixed(2)}`
         };
       } else {
-        console.log(`[5分钟进场] ❌ 空头未触发 (${passedConditions}/4条件)`);
+        console.log(`[5分钟进场] ❌ 空头未触发 (${passedConditions}/${enabledConditionsCount}条件, 需要${minRequired}个)`);
         return {
           signal: false,
           type: trendDirection,
-          reason: `空头进场未通过 (${passedConditions}/4条件)`,
-          details: `未满足条件: ${failedChecks.length > 0 ? failedChecks.join('; ') : '满足条件不足2个'}`
+          reason: `空头进场未通过 (${passedConditions}/${enabledConditionsCount}条件, 需要${minRequired}个)`,
+          details: `未满足条件: ${failedChecks.length > 0 ? failedChecks.join('; ') : '满足条件不足' + minRequired + '个'}`
         };
       }
     }
@@ -2589,8 +2611,28 @@ export default function BinanceAutoTrader() {
           <div className="mt-6 pt-6 border-t border-gray-700">
             <h3 className="text-lg font-bold mb-4">5分钟进场筛选条件</h3>
             <div className="bg-gray-700 rounded-lg p-4 mb-4">
-              <div className="text-sm text-gray-300 mb-2">
-                说明：进场需要满足 <strong className="text-blue-400">至少 2/4 个条件</strong>。关闭某个条件后，该条件将自动视为已满足。
+              <div className="mb-4">
+                <label className="block text-sm text-gray-400 mb-1">需要满足的最少条件数</label>
+                <div className="flex items-center gap-4">
+                  <input
+                    type="number"
+                    step="1"
+                    min="1"
+                    max="4"
+                    value={strategyParams.minConditionsRequired}
+                    onChange={(e) => {
+                      const value = Math.min(4, Math.max(1, Number(e.target.value)));
+                      setStrategyParams({ ...strategyParams, minConditionsRequired: value });
+                    }}
+                    className="w-24 bg-gray-600 rounded px-3 py-2 text-white"
+                  />
+                  <div className="text-xs text-gray-500">
+                    范围: 1-4 个条件 (默认 2 个)
+                  </div>
+                </div>
+              </div>
+              <div className="text-sm text-gray-300 border-t border-gray-600 pt-3">
+                说明：进场需要满足 <strong className="text-blue-400">至少 {strategyParams.minConditionsRequired}/4 个条件</strong>。关闭某个条件后，该条件将自动视为已满足。
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
