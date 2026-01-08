@@ -15,7 +15,10 @@ export async function POST(request: NextRequest) {
   try {
     const { apiKey, apiSecret, testnet = false } = await request.json();
 
+    console.log('[Balance API] Request received', { apiKey: apiKey ? '***' : 'missing', apiSecret: apiSecret ? '***' : 'missing', testnet });
+
     if (!apiKey || !apiSecret) {
+      console.error('[Balance API] Missing credentials');
       return NextResponse.json(
         { error: "API Key and Secret are required" },
         { status: 400 }
@@ -26,6 +29,8 @@ export async function POST(request: NextRequest) {
     const timestamp = Date.now();
     const queryString = `timestamp=${timestamp}`;
     const signature = createSignature(queryString, apiSecret);
+
+    console.log('[Balance API] Fetching from', baseUrl);
 
     const response = await fetch(
       `${baseUrl}/fapi/v2/balance?${queryString}&signature=${signature}`,
@@ -39,6 +44,7 @@ export async function POST(request: NextRequest) {
 
     if (!response.ok) {
       const error = await response.json();
+      console.error('[Balance API] Binance API error', error);
       return NextResponse.json(
         { error: error.msg || "Failed to fetch balance" },
         { status: response.status }

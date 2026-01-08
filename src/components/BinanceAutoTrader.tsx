@@ -727,6 +727,8 @@ export default function BinanceAutoTrader() {
     setError("");
 
     try {
+      console.log('[connectBinance] Starting connection...');
+
       // 获取合约列表
       const symbolsResponse = await fetch(
         "https://fapi.binance.com/fapi/v1/exchangeInfo?productType=UM",
@@ -749,9 +751,11 @@ export default function BinanceAutoTrader() {
       );
 
       setSymbols(usdtSymbols);
+      console.log('[connectBinance] Symbols loaded:', usdtSymbols.length);
 
       // 获取账户余额
       if (apiKey && apiSecret) {
+        console.log('[connectBinance] Fetching balance...');
         const balanceResponse = await fetch("/api/binance/balance", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -761,11 +765,19 @@ export default function BinanceAutoTrader() {
         if (balanceResponse.ok) {
           const balanceData = await balanceResponse.json();
           setAccountBalance(balanceData);
+          console.log('[connectBinance] Balance loaded:', balanceData);
+        } else {
+          const errorData = await balanceResponse.json();
+          console.error('[connectBinance] Balance fetch failed:', errorData);
+          throw new Error(`获取余额失败: ${errorData.error}`);
         }
+      } else {
+        console.log('[connectBinance] No API credentials provided, skipping balance fetch');
       }
 
       setConnected(true);
       saveConfig();
+      console.log('[connectBinance] Connected successfully');
 
       // 默认选择主流币
       const popularSymbols = usdtSymbols
@@ -774,7 +786,9 @@ export default function BinanceAutoTrader() {
         )
         .map((s: FuturesSymbol) => s.symbol);
       setSelectedSymbols(popularSymbols);
+      console.log('[connectBinance] Selected symbols:', popularSymbols);
     } catch (err: any) {
+      console.error('[connectBinance] Connection failed:', err);
       setError(err.message || "连接失败");
       setConnected(false);
     } finally {
@@ -784,9 +798,14 @@ export default function BinanceAutoTrader() {
 
   // 获取账户信息
   const fetchAccountInfo = async () => {
-    if (!connected || !apiKey || !apiSecret) return;
+    if (!connected || !apiKey || !apiSecret) {
+      console.log('[fetchAccountInfo] Skipped: connected=', connected, 'hasApiKey=', !!apiKey, 'hasApiSecret=', !!apiSecret);
+      return;
+    }
 
     try {
+      console.log('[fetchAccountInfo] Fetching account info...');
+
       // 获取余额
       const balanceResponse = await fetch("/api/binance/balance", {
         method: "POST",
@@ -797,6 +816,11 @@ export default function BinanceAutoTrader() {
       if (balanceResponse.ok) {
         const balanceData = await balanceResponse.json();
         setAccountBalance(balanceData);
+        console.log('[fetchAccountInfo] Balance fetched:', balanceData);
+      } else {
+        const errorData = await balanceResponse.json();
+        console.error('[fetchAccountInfo] Balance error:', errorData);
+        setError(`获取余额失败: ${errorData.error}`);
       }
 
       // 获取持仓
@@ -820,9 +844,14 @@ export default function BinanceAutoTrader() {
         }));
 
         setPositions(initializedPositions);
+        console.log('[fetchAccountInfo] Positions fetched:', initializedPositions.length);
 
         // 检查持仓并自动平仓
         await checkPositionsAndAutoClose();
+      } else {
+        const errorData = await positionsResponse.json();
+        console.error('[fetchAccountInfo] Positions error:', errorData);
+        setError(`获取持仓失败: ${errorData.error}`);
       }
 
       // 获取订单
@@ -835,9 +864,15 @@ export default function BinanceAutoTrader() {
       if (ordersResponse.ok) {
         const ordersData = await ordersResponse.json();
         setOrders(ordersData);
+        console.log('[fetchAccountInfo] Orders fetched:', ordersData.length);
+      } else {
+        const errorData = await ordersResponse.json();
+        console.error('[fetchAccountInfo] Orders error:', errorData);
+        setError(`获取订单失败: ${errorData.error}`);
       }
     } catch (err: any) {
       console.error("获取账户信息失败:", err);
+      setError(`获取账户信息失败: ${err.message}`);
     }
   };
 

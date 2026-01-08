@@ -15,7 +15,10 @@ export async function POST(request: NextRequest) {
   try {
     const { apiKey, apiSecret, testnet = false, symbol, limit = 20 } = await request.json();
 
+    console.log('[Orders API] Request received', { apiKey: apiKey ? '***' : 'missing', apiSecret: apiSecret ? '***' : 'missing', testnet, symbol, limit });
+
     if (!apiKey || !apiSecret) {
+      console.error('[Orders API] Missing credentials');
       return NextResponse.json(
         { error: "API Key and Secret are required" },
         { status: 400 }
@@ -26,6 +29,8 @@ export async function POST(request: NextRequest) {
     const timestamp = Date.now();
     const queryString = `timestamp=${timestamp}&limit=${limit}${symbol ? `&symbol=${symbol}` : ""}`;
     const signature = createSignature(queryString, apiSecret);
+
+    console.log('[Orders API] Fetching from', baseUrl);
 
     const response = await fetch(
       `${baseUrl}/fapi/v1/allOrders?${queryString}&signature=${signature}`,
@@ -39,6 +44,7 @@ export async function POST(request: NextRequest) {
 
     if (!response.ok) {
       const error = await response.json();
+      console.error('[Orders API] Binance API error', error);
       return NextResponse.json(
         { error: error.msg || "Failed to fetch orders" },
         { status: response.status }
