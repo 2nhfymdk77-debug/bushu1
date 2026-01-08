@@ -1692,16 +1692,15 @@ export default function BinanceAutoTrader() {
           const formattedStopLossPrice = parseFloat(stopLossPrice.toFixed(pricePrecision));
           const formattedTakeProfitPrice = parseFloat(takeProfitPrice.toFixed(pricePrecision));
 
-          // 止损订单（STOP_LOSS_LIMIT，使用限价单避免滑点过大）
+          // 止损订单（STOP_MARKET，使用市价单确保快速成交）
           const stopLossSide = signal.direction === "long" ? "SELL" : "BUY";
           const stopLossOrder = {
             apiKey,
             apiSecret,
             symbol: signal.symbol,
             side: stopLossSide,
-            type: "STOP_LOSS_LIMIT",
+            type: "STOP_MARKET",
             quantity: formattedQuantity,
-            price: formattedStopLossPrice, // 止损执行价格（限价单）
             triggerPrice: formattedStopLossPrice, // 触发价格
             positionSide,
           };
