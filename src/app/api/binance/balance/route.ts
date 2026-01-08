@@ -14,9 +14,18 @@ export async function POST(request: NextRequest) {
   try {
     const { apiKey, apiSecret } = await request.json();
 
-    console.log('[Balance API] Request received', { apiKey: apiKey ? '***' : 'missing', apiSecret: apiSecret ? '***' : 'missing' });
+    // 清理API密钥和Secret（去除前后空格）
+    const cleanApiKey = apiKey?.trim();
+    const cleanApiSecret = apiSecret?.trim();
 
-    if (!apiKey || !apiSecret) {
+    console.log('[Balance API] Request received', {
+      apiKey: cleanApiKey ? `${cleanApiKey.slice(0, 8)}...` : 'missing',
+      apiSecret: cleanApiSecret ? `${cleanApiSecret.slice(0, 8)}...` : 'missing',
+      apiKeyLength: cleanApiKey?.length,
+      apiSecretLength: cleanApiSecret?.length
+    });
+
+    if (!cleanApiKey || !cleanApiSecret) {
       console.error('[Balance API] Missing credentials');
       return NextResponse.json(
         { error: "API Key and Secret are required" },
@@ -26,7 +35,14 @@ export async function POST(request: NextRequest) {
 
     const timestamp = Date.now();
     const queryString = `timestamp=${timestamp}`;
-    const signature = createSignature(queryString, apiSecret);
+    const signature = createSignature(queryString, cleanApiSecret);
+
+    console.log('[Balance API] Request details', {
+      timestamp,
+      localTime: new Date(timestamp).toISOString(),
+      queryString,
+      signatureLength: signature.length
+    });
 
     console.log('[Balance API] Fetching from', BASE_URL);
 
@@ -34,7 +50,7 @@ export async function POST(request: NextRequest) {
       `${BASE_URL}/fapi/v2/balance?${queryString}&signature=${signature}`,
       {
         headers: {
-          "X-MBX-APIKEY": apiKey,
+          "X-MBX-APIKEY": cleanApiKey,
           "Content-Type": "application/json",
         },
       }
@@ -42,9 +58,14 @@ export async function POST(request: NextRequest) {
 
     if (!response.ok) {
       const error = await response.json();
-      console.error('[Balance API] Binance API error', error);
+      console.error('[Balance API] Binance API error', {
+        code: error.code,
+        msg: error.msg,
+        timestamp,
+        serverTimeDiff: error.serverTime ? (error.serverTime - timestamp) : 'unknown'
+      });
       return NextResponse.json(
-        { error: error.msg || "Failed to fetch balance" },
+        { error: error.msg || "Failed to fetch balance", code: error.code },
         { status: response.status }
       );
     }

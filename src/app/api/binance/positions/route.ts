@@ -14,9 +14,16 @@ export async function POST(request: NextRequest) {
   try {
     const { apiKey, apiSecret } = await request.json();
 
-    console.log('[Positions API] Request received', { apiKey: apiKey ? '***' : 'missing', apiSecret: apiSecret ? '***' : 'missing' });
+    // 清理API密钥和Secret
+    const cleanApiKey = apiKey?.trim();
+    const cleanApiSecret = apiSecret?.trim();
 
-    if (!apiKey || !apiSecret) {
+    console.log('[Positions API] Request received', {
+      apiKey: cleanApiKey ? `${cleanApiKey.slice(0, 8)}...` : 'missing',
+      apiSecret: cleanApiSecret ? `${cleanApiSecret.slice(0, 8)}...` : 'missing'
+    });
+
+    if (!cleanApiKey || !cleanApiSecret) {
       console.error('[Positions API] Missing credentials');
       return NextResponse.json(
         { error: "API Key and Secret are required" },
@@ -26,15 +33,19 @@ export async function POST(request: NextRequest) {
 
     const timestamp = Date.now();
     const queryString = `timestamp=${timestamp}`;
-    const signature = createSignature(queryString, apiSecret);
+    const signature = createSignature(queryString, cleanApiSecret);
 
-    console.log('[Positions API] Fetching from', BASE_URL);
+    console.log('[Positions API] Request details', {
+      timestamp,
+      localTime: new Date(timestamp).toISOString(),
+      signatureLength: signature.length
+    });
 
     const response = await fetch(
       `${BASE_URL}/fapi/v2/positionRisk?${queryString}&signature=${signature}`,
       {
         headers: {
-          "X-MBX-APIKEY": apiKey,
+          "X-MBX-APIKEY": cleanApiKey,
           "Content-Type": "application/json",
         },
       }
@@ -42,9 +53,14 @@ export async function POST(request: NextRequest) {
 
     if (!response.ok) {
       const error = await response.json();
-      console.error('[Positions API] Binance API error', error);
+      console.error('[Positions API] Binance API error', {
+        code: error.code,
+        msg: error.msg,
+        timestamp,
+        serverTimeDiff: error.serverTime ? (error.serverTime - timestamp) : 'unknown'
+      });
       return NextResponse.json(
-        { error: error.msg || "Failed to fetch positions" },
+        { error: error.msg || "Failed to fetch positions", code: error.code },
         { status: response.status }
       );
     }
@@ -65,8 +81,10 @@ export async function POST(request: NextRequest) {
         notional: parseFloat(p.notional),
       }));
 
+    console.log('[Positions API] Positions fetched', activePositions.length);
     return NextResponse.json(activePositions);
   } catch (error: any) {
+    console.error('[Positions API] Internal error', error);
     return NextResponse.json(
       { error: error.message || "Internal server error" },
       { status: 500 }

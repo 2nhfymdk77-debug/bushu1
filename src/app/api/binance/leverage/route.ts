@@ -14,14 +14,18 @@ export async function POST(request: NextRequest) {
   try {
     const { apiKey, apiSecret, symbol, leverage } = await request.json();
 
+    // 清理API密钥和Secret（去除前后空格）
+    const cleanApiKey = apiKey?.trim();
+    const cleanApiSecret = apiSecret?.trim();
+
     console.log('[Leverage API] Request received', {
-      apiKey: apiKey ? '***' : 'missing',
-      apiSecret: apiSecret ? '***' : 'missing',
+      apiKey: cleanApiKey ? `${cleanApiKey.slice(0, 8)}...` : 'missing',
+      apiSecret: cleanApiSecret ? `${cleanApiSecret.slice(0, 8)}...` : 'missing',
       symbol,
       leverage
     });
 
-    if (!apiKey || !apiSecret) {
+    if (!cleanApiKey || !cleanApiSecret) {
       console.error('[Leverage API] Missing credentials');
       return NextResponse.json(
         { error: "API Key and Secret are required" },
@@ -47,24 +51,36 @@ export async function POST(request: NextRequest) {
     }
 
     const timestamp = Date.now();
-    const queryString = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp}`;
-    const signature = createSignature(queryString, apiSecret);
+    // 参数按字母顺序排序：leverage, symbol, timestamp
+    const queryString = `leverage=${leverage}&symbol=${symbol}&timestamp=${timestamp}`;
+    const signature = createSignature(queryString, cleanApiSecret);
+
+    console.log('[Leverage API] Request details', {
+      timestamp,
+      queryString,
+      signatureLength: signature.length
+    });
 
     console.log('[Leverage API] Setting leverage to', leverageNum, 'for', symbol);
 
     const response = await fetch(`${BASE_URL}/fapi/v1/leverage?${queryString}&signature=${signature}`, {
       method: "POST",
       headers: {
-        "X-MBX-APIKEY": apiKey,
+        "X-MBX-APIKEY": cleanApiKey,
         "Content-Type": "application/json",
       },
     });
 
     if (!response.ok) {
       const error = await response.json();
-      console.error('[Leverage API] Binance API error', error);
+      console.error('[Leverage API] Binance API error', {
+        code: error.code,
+        msg: error.msg,
+        timestamp,
+        serverTimeDiff: error.serverTime ? (error.serverTime - timestamp) : 'unknown'
+      });
       return NextResponse.json(
-        { error: error.msg || "Failed to set leverage" },
+        { error: error.msg || "Failed to set leverage", code: error.code },
         { status: response.status }
       );
     }
