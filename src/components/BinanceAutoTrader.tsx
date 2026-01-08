@@ -180,10 +180,20 @@ export default function BinanceAutoTrader() {
   const [scanIntervalRef, setScanIntervalRef] = useState<NodeJS.Timeout | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [scanLog, setScanLog] = useState<string[]>([]);
+  const [systemLog, setSystemLog] = useState<string[]>([]); // 系统日志（交易、WebSocket、系统事件）
 
   const wsRef = useRef<WebSocket | null>(null);
   const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const emaCacheRef = useRef<Map<string, { short: number[]; long: number[]; volMA: number[] }>>(new Map());
+
+  // 统一的日志记录函数
+  const addSystemLog = (msg: string, type: 'info' | 'success' | 'error' | 'warning' = 'info') => {
+    const timestamp = new Date().toLocaleTimeString();
+    const prefix = type === 'error' ? '❌' : type === 'success' ? '✅' : type === 'warning' ? '⚠️' : 'ℹ️';
+    const logMsg = `[${timestamp}] ${prefix} ${msg}`;
+    console.log(`[System] ${logMsg}`);
+    setSystemLog(prev => [logMsg, ...prev.slice(0, 49)]);
+  };
 
   // 从localStorage加载配置
   useEffect(() => {
@@ -794,11 +804,11 @@ export default function BinanceAutoTrader() {
       );
 
       setSymbols(usdtSymbols);
-      console.log('[connectBinance] Symbols loaded:', usdtSymbols.length);
+      addSystemLog(`加载了 ${usdtSymbols.length} 个 USDT 永续合约`, 'success');
 
       // 获取账户余额
       if (apiKey && apiSecret) {
-        console.log('[connectBinance] Fetching balance...');
+        addSystemLog("正在获取账户余额...", 'info');
         const balanceResponse = await fetch("/api/binance/balance", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -808,19 +818,20 @@ export default function BinanceAutoTrader() {
         if (balanceResponse.ok) {
           const balanceData = await balanceResponse.json();
           setAccountBalance(balanceData);
-          console.log('[connectBinance] Balance loaded:', balanceData);
+          addSystemLog(`账户余额: ${balanceData.available.toFixed(2)} USDT`, 'success');
         } else {
           const errorData = await balanceResponse.json();
-          console.error('[connectBinance] Balance fetch failed:', errorData);
-          throw new Error(`获取余额失败: ${errorData.error}`);
+          const errorMsg = `获取余额失败: ${errorData.error}`;
+          addSystemLog(errorMsg, 'error');
+          throw new Error(errorMsg);
         }
       } else {
-        console.log('[connectBinance] No API credentials provided, skipping balance fetch');
+        addSystemLog("未提供 API 凭证，跳过余额获取", 'warning');
       }
 
       setConnected(true);
       saveConfig();
-      console.log('[connectBinance] Connected successfully');
+      addSystemLog("成功连接币安主网", 'success');
 
       // 默认选择主流币
       const popularSymbols = usdtSymbols
@@ -829,7 +840,7 @@ export default function BinanceAutoTrader() {
         )
         .map((s: FuturesSymbol) => s.symbol);
       setSelectedSymbols(popularSymbols);
-      console.log('[connectBinance] Selected symbols:', popularSymbols);
+      addSystemLog(`默认选择: ${popularSymbols.join(', ')}`, 'info');
     } catch (err: any) {
       console.error('[connectBinance] Connection failed:', err);
       setError(err.message || "连接失败");
@@ -1222,7 +1233,7 @@ export default function BinanceAutoTrader() {
 
     // 检查持仓数量限制
     if (positions.length >= tradingConfig.maxOpenPositions) {
-      console.log("已达到最大持仓数量");
+      addSystemLog(`已达到最大持仓数量 (${tradingConfig.maxOpenPositions})，跳过交易`, 'warning');
       return;
     }
 
@@ -1230,16 +1241,18 @@ export default function BinanceAutoTrader() {
     const now = Date.now();
     const lastTime = lastSignalTimes.get(signal.symbol) || 0;
     if (now - lastTime < 300000) { // 5分钟
-      console.log(`合约 ${signal.symbol} 距离上次交易不足5分钟，跳过`);
+      addSystemLog(`合约 ${signal.symbol} 距离上次交易不足5分钟，跳过`, 'warning');
       return;
     }
 
     try {
       const side = signal.direction === "long" ? "BUY" : "SELL";
       const type = "MARKET";
+      const directionText = signal.direction === "long" ? "做多" : "做空";
+
+      addSystemLog(`准备交易 ${signal.symbol} ${directionText} @ ${signal.entryPrice}`, 'info');
 
       // 设置杠杆（在交易前设置）
-      console.log(`[executeTrade] Setting leverage to ${strategyParams.leverage}x for ${signal.symbol}`);
       const leverageResponse = await fetch("/api/binance/leverage", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1253,11 +1266,10 @@ export default function BinanceAutoTrader() {
 
       if (leverageResponse.ok) {
         const leverageData = await leverageResponse.json();
-        console.log(`[executeTrade] Leverage set successfully: ${leverageData.leverage}x for ${leverageData.symbol}`);
+        addSystemLog(`设置杠杆 ${leverageData.leverage}x for ${leverageData.symbol}`, 'success');
       } else {
         const leverageError = await leverageResponse.json();
-        console.warn(`[executeTrade] Failed to set leverage: ${leverageError.error}`);
-        // 继续执行交易，但不设置杠杆
+        addSystemLog(`设置杠杆失败: ${leverageError.error}，继续执行交易`, 'warning');
       }
 
       const availableBalance = accountBalance.available;
@@ -1312,9 +1324,11 @@ export default function BinanceAutoTrader() {
       setTradeRecords((prev) => [trade, ...prev.slice(0, 99)]);
       setLastSignalTimes((prev) => new Map(prev).set(signal.symbol, now));
       setDailyTradesCount((prev) => prev + 1);
+      addSystemLog(`交易成功: ${signal.symbol} ${side} ${quantity.toFixed(4)} @ ${signal.entryPrice}`, 'success');
     } catch (err: any) {
-      console.error("交易执行失败:", err);
-      setError(err.message || "交易执行失败");
+      const errorMsg = err.message || "交易执行失败";
+      addSystemLog(`交易失败: ${errorMsg}`, 'error');
+      setError(errorMsg);
 
       const failedTrade: TradeRecord = {
         id: Date.now().toString(),
@@ -1338,12 +1352,12 @@ export default function BinanceAutoTrader() {
 
     const streams = selectedSymbols.map(s => `${s.toLowerCase()}@kline_15m`).join("/");
     const wsUrl = `wss://fstream.binance.com/ws/${streams}`;
-    console.log('[WebSocket] 连接中...', wsUrl);
+    addSystemLog(`连接 WebSocket: ${selectedSymbols.length} 个合约`, 'info');
 
     wsRef.current = new WebSocket(wsUrl);
 
     wsRef.current.onopen = () => {
-      console.log('[WebSocket] 已连接');
+      addSystemLog("WebSocket 已连接，开始接收实时数据", 'success');
     };
 
     wsRef.current.onmessage = (event) => {
@@ -1367,11 +1381,10 @@ export default function BinanceAutoTrader() {
 
         // 使用更新后的数据检查信号
         if (updated.length >= strategyParams.emaLong + 10) {
-          console.log(`[WebSocket] ${symbol} 收到K线, 数据长度: ${updated.length}`);
           // WebSocket实时监控只检查15分钟趋势方向（完整的信号扫描由scanAllSymbols完成）
           const trendSignal = checkTrendDirection(symbol, updated);
           if (trendSignal) {
-            console.log(`[WebSocket] ${symbol} 发现趋势信号: ${trendSignal.direction}`);
+            addSystemLog(`${symbol} 发现趋势信号: ${trendSignal.direction}`, 'info');
 
             // WebSocket只用于显示趋势信号，不执行交易
             // 完整的信号（15分钟趋势 + 5分钟回调进场）由scanAllSymbols检测并执行
@@ -1385,7 +1398,6 @@ export default function BinanceAutoTrader() {
               ) {
                 return prev;
               }
-              console.log(`[WebSocket] ${symbol} 添加趋势信号到列表（仅供参考）`);
               return [{
                 ...trendSignal,
                 confidence: 0.5, // 趋势信号置信度较低
@@ -1402,12 +1414,12 @@ export default function BinanceAutoTrader() {
     };
 
     wsRef.current.onerror = (error) => {
-      console.error("[WebSocket] 错误:", error);
+      addSystemLog("WebSocket 连接错误", 'error');
       setError("WebSocket连接错误");
     };
 
     wsRef.current.onclose = () => {
-      console.log('[WebSocket] 连接关闭');
+      addSystemLog("WebSocket 连接已关闭", 'warning');
     };
   };
 
@@ -2317,6 +2329,32 @@ export default function BinanceAutoTrader() {
                   </div>
                 )}
               </div>
+
+              {/* 系统日志 */}
+              {systemLog.length > 0 && (
+                <div className="mt-4 bg-gray-900 rounded-lg p-3">
+                  <div className="text-xs text-gray-400 mb-2 flex items-center justify-between">
+                    <span>系统日志</span>
+                    <span className="text-gray-500">({systemLog.length} 条)</span>
+                  </div>
+                  <div className="space-y-1 max-h-60 overflow-y-auto text-xs font-mono">
+                    {systemLog.map((log, index) => (
+                      <div
+                        key={index}
+                        className={`${
+                          log.includes('✅') ? 'text-green-400' :
+                          log.includes('❌') ? 'text-red-400' :
+                          log.includes('⚠️') ? 'text-orange-400' :
+                          log.includes('ℹ️') ? 'text-blue-400' :
+                          'text-gray-300'
+                        }`}
+                      >
+                        {log}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
