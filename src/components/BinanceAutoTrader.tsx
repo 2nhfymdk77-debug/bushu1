@@ -604,7 +604,7 @@ export default function BinanceAutoTrader() {
         if (!tpExecuted.r1) {
           const hitR1 = isLong ? currentPrice >= r1Price : currentPrice <= r1Price;
           if (hitR1) {
-            console.log(`达到1R止盈位: ${symbol} 价格: ${currentPrice.toFixed(2)} 1R价: ${r1Price.toFixed(2)}`);
+            console.log(`[分段止盈] 达到1R止盈位: ${symbol} 价格: ${currentPrice.toFixed(2)} 1R价: ${r1Price.toFixed(2)} 当前持仓: ${position.positionAmt}`);
             // 平仓50%
             await executePartialClose(position, 0.5, "1R止盈50%");
             continue; // 执行后继续下一个持仓
@@ -615,7 +615,7 @@ export default function BinanceAutoTrader() {
         if (tpExecuted.r1 && !tpExecuted.r2) {
           const hitR2 = isLong ? currentPrice >= r2Price : currentPrice <= r2Price;
           if (hitR2) {
-            console.log(`达到2R止盈位: ${symbol} 价格: ${currentPrice.toFixed(2)} 2R价: ${r2Price.toFixed(2)}`);
+            console.log(`[分段止盈] 达到2R止盈位: ${symbol} 价格: ${currentPrice.toFixed(2)} 2R价: ${r2Price.toFixed(2)} 当前持仓: ${position.positionAmt} 止盈状态: r1=${tpExecuted.r1}`);
             // 平仓剩余100%（因为之前已经平了50%，现在平剩下的全部）
             await executePartialClose(position, 1.0, "2R全部止盈");
             continue;
@@ -626,7 +626,7 @@ export default function BinanceAutoTrader() {
         if (tpExecuted.r2 && !tpExecuted.r3) {
           const hitR3 = isLong ? currentPrice >= r3Price : currentPrice <= r3Price;
           if (hitR3) {
-            console.log(`达到3R止盈位: ${symbol} 价格: ${currentPrice.toFixed(2)} 3R价: ${r3Price.toFixed(2)}`);
+            console.log(`[分段止盈] 达到3R止盈位: ${symbol} 价格: ${currentPrice.toFixed(2)} 3R价: ${r3Price.toFixed(2)} 当前持仓: ${position.positionAmt}`);
             // 平仓剩余所有
             await executePartialClose(position, 1.0, "3R全部止盈");
             continue;
@@ -786,46 +786,44 @@ export default function BinanceAutoTrader() {
 
       setTradeRecords((prev) => [closeTrade, ...prev.slice(0, 99)]);
 
-      // 更新止盈执行状态
-      if (reason.includes("1R")) {
-        setPositions((prev) =>
-          prev.map((p) =>
-            p.symbol === position.symbol
-              ? {
-                  ...p,
-                  positionAmt: isLong ? p.positionAmt - closeQuantity : p.positionAmt + closeQuantity,
-                  takeProfitExecuted: { ...(p.takeProfitExecuted || { r1: false, r2: false, r3: false }), r1: true },
-                }
-              : p
-          )
-        );
-      } else if (reason.includes("2R")) {
-        setPositions((prev) =>
-          prev.map((p) =>
-            p.symbol === position.symbol
-              ? {
-                  ...p,
-                  positionAmt: isLong ? p.positionAmt - closeQuantity : p.positionAmt + closeQuantity,
-                  takeProfitExecuted: { ...(p.takeProfitExecuted || { r1: false, r2: false, r3: false }), r2: true },
-                }
-              : p
-          )
-        );
-      } else if (reason.includes("3R")) {
-        setPositions((prev) =>
-          prev.map((p) =>
-            p.symbol === position.symbol
-              ? {
-                  ...p,
-                  positionAmt: isLong ? p.positionAmt - closeQuantity : p.positionAmt + closeQuantity,
-                  takeProfitExecuted: { ...(p.takeProfitExecuted || { r1: false, r2: false, r3: false }), r3: true },
-                }
-              : p
-          )
-        );
-      }
+      // 更新止盈执行状态和持仓数量
+      setPositions((prev) =>
+        prev.map((p) => {
+          // 同时匹配 symbol 和 positionSide，确保更新正确的持仓
+          if (p.symbol === position.symbol && p.positionSide === position.positionSide) {
+            const newTpExecuted = p.takeProfitExecuted || { r1: false, r2: false, r3: false };
+            const newAmt = isLong
+              ? p.positionAmt - closeQuantity
+              : p.positionAmt + closeQuantity; // 空头持仓是负数，加closeQuantity会向0靠近
+
+            if (reason.includes("1R")) {
+              return {
+                ...p,
+                positionAmt: newAmt,
+                takeProfitExecuted: { ...newTpExecuted, r1: true },
+              };
+            } else if (reason.includes("2R")) {
+              return {
+                ...p,
+                positionAmt: newAmt,
+                takeProfitExecuted: { ...newTpExecuted, r2: true },
+              };
+            } else if (reason.includes("3R")) {
+              return {
+                ...p,
+                positionAmt: newAmt,
+                takeProfitExecuted: { ...newTpExecuted, r3: true },
+              };
+            }
+          }
+          return p;
+        })
+      );
 
       console.log(`部分平仓成功: ${position.symbol} 比例: ${(percent * 100).toFixed(0)}% 原因: ${reason} 盈亏: ${(position.unRealizedProfit * percent).toFixed(2)} USDT`);
+
+      // 立即刷新持仓信息，确保状态同步（不调用 checkPositionsAndAutoClose，避免重复触发）
+      await fetchAccountInfo(false);
     } catch (err: any) {
       console.error(`部分平仓失败: ${position.symbol}`, err);
       setError(`部分平仓失败: ${err.message}`);
@@ -885,6 +883,9 @@ export default function BinanceAutoTrader() {
 
       setTradeRecords((prev) => [closeTrade, ...prev.slice(0, 99)]);
       console.log(`平仓成功: ${position.symbol} 原因: ${reason} 盈亏: ${position.unRealizedProfit.toFixed(2)} USDT`);
+
+      // 立即刷新持仓信息，确保状态同步（不调用 checkPositionsAndAutoClose，避免重复触发）
+      await fetchAccountInfo(false);
     } catch (err: any) {
       console.error(`自动平仓失败: ${position.symbol}`, err);
       setError(`自动平仓失败: ${err.message}`);
@@ -994,7 +995,7 @@ export default function BinanceAutoTrader() {
   };
 
   // 获取账户信息
-  const fetchAccountInfo = async () => {
+  const fetchAccountInfo = async (shouldCheckPositions = true) => {
     if (!connected || !apiKey || !apiSecret) {
       console.log('[fetchAccountInfo] Skipped: connected=', connected, 'hasApiKey=', !!apiKey, 'hasApiSecret=', !!apiSecret);
       return;
@@ -1030,21 +1031,36 @@ export default function BinanceAutoTrader() {
       if (positionsResponse.ok) {
         const positionsData = await positionsResponse.json();
 
+        // 保留现有的 takeProfitExecuted 状态，避免重置止盈记录
+        const existingTpExecuted = new Map<string, { r1: boolean; r2: boolean; r3: boolean }>();
+        positions.forEach(p => {
+          if (p.takeProfitExecuted && p.positionAmt !== 0) {
+            existingTpExecuted.set(`${p.symbol}_${p.positionSide}`, p.takeProfitExecuted);
+          }
+        });
+
         // 初始化新增字段
-        const initializedPositions = positionsData.map((p: Position) => ({
-          ...p,
-          highestPrice: p.highestPrice || p.entryPrice,
-          lowestPrice: p.lowestPrice || p.entryPrice,
-          takeProfitExecuted: p.takeProfitExecuted || { r1: false, r2: false, r3: false },
-          trailingStopPrice: p.trailingStopPrice,
-          stopLossBreakeven: p.stopLossBreakeven || false,
-        }));
+        const initializedPositions = positionsData.map((p: Position) => {
+          const key = `${p.symbol}_${p.positionSide}`;
+          const existingTp = existingTpExecuted.get(key);
+          return {
+            ...p,
+            highestPrice: p.highestPrice || p.entryPrice,
+            lowestPrice: p.lowestPrice || p.entryPrice,
+            takeProfitExecuted: existingTp || p.takeProfitExecuted || { r1: false, r2: false, r3: false },
+            trailingStopPrice: p.trailingStopPrice,
+            stopLossBreakeven: p.stopLossBreakeven || false,
+          };
+        });
 
         setPositions(initializedPositions);
-        console.log('[fetchAccountInfo] Positions fetched:', initializedPositions.length);
+        console.log('[fetchAccountInfo] Positions fetched:', initializedPositions.length,
+          'Existing TP states:', Array.from(existingTpExecuted.entries()).map(([k, v]) => `${k}: r1=${v.r1}, r2=${v.r2}, r3=${v.r3}`));
 
-        // 检查持仓并自动平仓
-        await checkPositionsAndAutoClose();
+        // 检查持仓并自动平仓（仅当 shouldCheckPositions 为 true 时）
+        if (shouldCheckPositions) {
+          await checkPositionsAndAutoClose();
+        }
       } else {
         const errorData = await positionsResponse.json();
         console.error('[fetchAccountInfo] Positions error:', errorData);
@@ -2057,7 +2073,7 @@ export default function BinanceAutoTrader() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold">账户信息</h2>
             <button
-              onClick={fetchAccountInfo}
+              onClick={() => fetchAccountInfo()}
               className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition"
             >
               刷新
