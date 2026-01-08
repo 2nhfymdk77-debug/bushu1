@@ -178,6 +178,8 @@ export default function BinanceAutoTrader() {
   const [lastSignalTime, setLastSignalTime] = useState<number>(0);
   const [dailyTradesCount, setDailyTradesCount] = useState(0);
   const [scanIntervalRef, setScanIntervalRef] = useState<NodeJS.Timeout | null>(null);
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanLog, setScanLog] = useState<string[]>([]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -193,9 +195,21 @@ export default function BinanceAutoTrader() {
 
   // 自动扫描所有合约
   const scanAllSymbols = async () => {
-    if (!connected || !autoScanAll) return;
+    if (!connected || !autoScanAll || isScanning) {
+      console.log('[Scan] 跳过扫描:', { connected, autoScanAll, isScanning });
+      return;
+    }
+
+    setIsScanning(true);
+    setScanLog([]);
+    const addLog = (msg: string) => {
+      const timestamp = new Date().toLocaleTimeString();
+      console.log(`[Scan] [${timestamp}] ${msg}`);
+      setScanLog(prev => [`[${timestamp}] ${msg}`, ...prev.slice(0, 19)]);
+    };
 
     try {
+      addLog("🚀 开始扫描热门合约...");
       setScanProgress("正在获取热门合约...");
 
       // 获取24h ticker数据
@@ -212,46 +226,59 @@ export default function BinanceAutoTrader() {
       }
 
       const tickers = await tickerResponse.json();
+      addLog(`✅ 获取到 ${tickers.length} 个合约`);
 
-      // 按成交量排序,取前20个USDT合约
+      // 按成交量排序,取前10个USDT合约（减少扫描数量，提高响应速度）
       const usdtTickers = tickers
         .filter((t: any) => t.symbol.endsWith("USDT") && parseFloat(t.quoteVolume) > 10000000)
         .sort((a: any, b: any) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-        .slice(0, 20)
+        .slice(0, 10)
         .map((t: any) => t.symbol);
 
+      addLog(`📊 筛选出 ${usdtTickers.length} 个高成交量合约: ${usdtTickers.join(', ')}`);
       setScanProgress(`正在扫描 ${usdtTickers.length} 个热门合约...`);
 
       // 对每个合约进行信号检测
       let signalsFound = 0;
       let tradesExecuted = 0;
-      const maxCheckSymbols = Math.min(usdtTickers.length, 15); // 每次最多检查15个
+      let checkedCount = 0;
+      let skippedCount = 0;
 
-      for (let i = 0; i < maxCheckSymbols; i++) {
+      for (let i = 0; i < usdtTickers.length; i++) {
         const symbol = usdtTickers[i];
-        setScanProgress(`正在扫描 ${i + 1}/${maxCheckSymbols}: ${symbol} (已交易: ${tradesExecuted})`);
+        checkedCount++;
+        const progress = Math.round((i + 1) / usdtTickers.length * 100);
+        setScanProgress(`扫描中 ${i + 1}/${usdtTickers.length}: ${symbol} (${progress}%)`);
+        addLog(`🔍 [${i + 1}/${usdtTickers.length}] 扫描 ${symbol}...`);
 
         // 检查是否达到持仓数量限制
         if (positions.length >= tradingConfig.maxOpenPositions) {
-          console.log(`已达到最大持仓数量限制 (${tradingConfig.maxOpenPositions})，停止开新仓位`);
-          setScanProgress(`已达到最大持仓限制 (${tradingConfig.maxOpenPositions})，继续扫描中...`);
+          addLog(`⚠️ 已达到最大持仓数量限制 (${tradingConfig.maxOpenPositions})，跳过开新仓位`);
+          skippedCount++;
+          continue;
         }
 
         // 检查是否达到每日交易次数限制
         if (dailyTradesCount >= tradingConfig.dailyTradesLimit) {
-          console.log(`已达到每日交易限制 (${tradingConfig.dailyTradesLimit})，停止开新仓位`);
-          setScanProgress(`已达到每日交易限制 (${tradingConfig.dailyTradesLimit})，继续扫描中...`);
+          addLog(`⚠️ 已达到每日交易限制 (${tradingConfig.dailyTradesLimit})，跳过开新仓位`);
+          skippedCount++;
+          continue;
         }
 
         // 获取K线数据（同时获取15分钟和5分钟）
         try {
-          // 并行获取15分钟和5分钟K线数据
+          addLog(`  📡 获取 ${symbol} K线数据...`);
+          const startTime = Date.now();
+
           const [kline15mResponse, kline5mResponse] = await Promise.all([
             fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=100`),
             fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=5m&limit=200`)
           ]);
 
-          if (!kline15mResponse.ok || !kline5mResponse.ok) continue;
+          if (!kline15mResponse.ok || !kline5mResponse.ok) {
+            addLog(`  ❌ ${symbol} K线数据获取失败`);
+            continue;
+          }
 
           const [kline15mRaw, kline5mRaw] = await Promise.all([
             kline15mResponse.json(),
@@ -276,12 +303,18 @@ export default function BinanceAutoTrader() {
             volume: parseFloat(k[5]),
           }));
 
+          const fetchTime = Date.now() - startTime;
+          addLog(`  ✅ ${symbol} K线数据获取完成 (${fetchTime}ms, 15m:${klines15m.length}, 5m:${klines5m.length})`);
+
           // 检测信号（多时间框架：15分钟趋势 + 5分钟回调进场）
           if (klines15m.length >= strategyParams.emaLong + 10 &&
               klines5m.length >= strategyParams.emaLong + 10) {
-            const signal = checkSignals(symbol, klines15m, klines5m);
+            addLog(`  🔎 ${symbol} 开始信号检测...`);
+            const { signal, reason } = checkSignals(symbol, klines15m, klines5m);
+
             if (signal) {
               signalsFound++;
+              addLog(`  🎯 ${symbol} 发现${signal.direction === 'long' ? '多头' : '空头'}信号! 价格: ${signal.entryPrice}`);
 
               // 检查是否可以执行交易
               let canExecute = autoTrading;
@@ -317,27 +350,48 @@ export default function BinanceAutoTrader() {
 
               // 执行交易（仅在未达到限制时）
               if (canExecute) {
+                addLog(`  📝 ${symbol} 执行交易...`);
                 await executeTrade(signal);
                 tradesExecuted++;
+                addLog(`  ✅ ${symbol} 交易执行完成`);
+              } else {
+                addLog(`  ⏭️ ${symbol} 跳过交易: ${notExecutedReason}`);
               }
+            } else {
+              addLog(`  ✖️ ${symbol} 无信号 - ${reason}`);
             }
+          } else {
+            addLog(`  ⚠️ ${symbol} K线数据不足 (需要 ${strategyParams.emaLong + 10} 条)`);
           }
-        } catch (err) {
+        } catch (err: any) {
+          addLog(`  ❌ ${symbol} 扫描失败: ${err.message}`);
           console.error(`扫描${symbol}失败:`, err);
         }
 
         // 避免请求过快
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
 
-      setScanProgress(`扫描完成: 发现 ${signalsFound} 个信号, 执行 ${tradesExecuted} 笔交易`);
+      const summary = `🏁 扫描完成: 检查 ${checkedCount} 个, 跳过 ${skippedCount} 个, 发现 ${signalsFound} 个信号, 执行 ${tradesExecuted} 笔交易`;
+      addLog(summary);
+      setScanProgress(summary);
 
       // 5秒后清除扫描状态
-      setTimeout(() => setScanProgress(""), 5000);
+      setTimeout(() => {
+        setScanProgress("");
+        setScanLog([]);
+      }, 10000);
     } catch (err: any) {
+      const errorMsg = `扫描失败: ${err.message || "未知错误"}`;
+      addLog(`❌ ${errorMsg}`);
       console.error("自动扫描失败:", err);
-      setScanProgress("扫描失败: " + (err.message || "未知错误"));
-      setTimeout(() => setScanProgress(""), 5000);
+      setScanProgress(errorMsg);
+      setTimeout(() => {
+        setScanProgress("");
+        setScanLog([]);
+      }, 5000);
+    } finally {
+      setIsScanning(false);
     }
   };
 
@@ -1059,10 +1113,10 @@ export default function BinanceAutoTrader() {
     symbol: string,
     data15m: KLineData[],
     data5m: KLineData[]
-  ): Signal | null => {
+  ): { signal: Signal | null; reason: string } => {
     // 检查数据量
     if (data15m.length < strategyParams.emaLong + 10 || data5m.length < strategyParams.emaLong + 10) {
-      return null;
+      return { signal: null, reason: `数据不足 (15m:${data15m.length}, 5m:${data5m.length}, 需要:${strategyParams.emaLong + 10})` };
     }
 
     // 步骤1: 15分钟趋势过滤
@@ -1077,7 +1131,17 @@ export default function BinanceAutoTrader() {
       volumeMA15m
     );
 
-    if (trendDirection === "none") return null;
+    if (trendDirection === "none") {
+      const index = data15m.length - 1;
+      const emaS = emaShort15m[index];
+      const emaL = emaLong15m[index];
+      const close = data15m[index].close;
+      const distance = Math.abs(emaS - emaL) / emaL * 100;
+      return {
+        signal: null,
+        reason: `趋势不明确 (EMA${strategyParams.emaShort}:${emaS.toFixed(2)}, EMA${strategyParams.emaLong}:${emaL.toFixed(2)}, 距离:${distance.toFixed(2)}%, 需要:${strategyParams.minTrendDistance}%)`
+      };
+    }
 
     // 步骤2: 5分钟回调进场
     const emaShort5m = calculateEMA(data5m, strategyParams.emaShort);
@@ -1092,16 +1156,26 @@ export default function BinanceAutoTrader() {
       rsi5m
     );
 
-    if (!signal) return null;
+    if (!signal) {
+      const index = data5m.length - 1;
+      const rsi = rsi5m[index];
+      return {
+        signal: null,
+        reason: `未触发进场 (趋势:${trendDirection}, RSI:${rsi.toFixed(1)})`
+      };
+    }
 
     const current5m = data5m[data5m.length - 1];
     return {
-      symbol,
-      direction: type,
-      time: current5m.timestamp,
-      reason: `15分钟${trendDirection === "long" ? "多头" : "空头"}趋势 + 5分钟回调进场`,
-      confidence: 0.85,
-      entryPrice: current5m.close,
+      signal: {
+        symbol,
+        direction: type,
+        time: current5m.timestamp,
+        reason: `15分钟${trendDirection === "long" ? "多头" : "空头"}趋势 + 5分钟回调进场`,
+        confidence: 0.85,
+        entryPrice: current5m.close,
+      },
+      reason: "信号触发"
     };
   };
 
@@ -1262,8 +1336,13 @@ export default function BinanceAutoTrader() {
 
     const streams = selectedSymbols.map(s => `${s.toLowerCase()}@kline_15m`).join("/");
     const wsUrl = `wss://fstream.binance.com/ws/${streams}`;
+    console.log('[WebSocket] 连接中...', wsUrl);
 
     wsRef.current = new WebSocket(wsUrl);
+
+    wsRef.current.onopen = () => {
+      console.log('[WebSocket] 已连接');
+    };
 
     wsRef.current.onmessage = (event) => {
       const data = JSON.parse(event.data);
@@ -1283,56 +1362,66 @@ export default function BinanceAutoTrader() {
         const existing = newMap.get(symbol) || [];
         const updated = [...existing, kline].slice(-200);
         newMap.set(symbol, updated);
-        return newMap;
-      });
 
-      const symbolData = klineData.get(symbol) || [];
-      if (symbolData.length >= strategyParams.emaLong + 10) {
-        // WebSocket实时监控只检查15分钟趋势方向（完整的信号扫描由scanAllSymbols完成）
-        const trendSignal = checkTrendDirection(symbol, [...symbolData, kline].slice(-200));
-        if (trendSignal) {
-          // 检查是否可以执行交易
-          let canExecute = autoTrading;
-          let notExecutedReason = "";
+        // 使用更新后的数据检查信号
+        if (updated.length >= strategyParams.emaLong + 10) {
+          console.log(`[WebSocket] ${symbol} 收到K线, 数据长度: ${updated.length}`);
+          // WebSocket实时监控只检查15分钟趋势方向（完整的信号扫描由scanAllSymbols完成）
+          const trendSignal = checkTrendDirection(symbol, updated);
+          if (trendSignal) {
+            console.log(`[WebSocket] ${symbol} 发现趋势信号: ${trendSignal.direction}`);
 
-          if (!autoTrading) {
-            notExecutedReason = "自动交易未开启";
-            canExecute = false;
-          } else if (positions.length >= tradingConfig.maxOpenPositions) {
-            notExecutedReason = `已达到最大持仓限制 (${tradingConfig.maxOpenPositions})`;
-            canExecute = false;
-          } else if (dailyTradesCount >= tradingConfig.dailyTradesLimit) {
-            notExecutedReason = `已达到每日交易限制 (${tradingConfig.dailyTradesLimit})`;
-            canExecute = false;
-          }
+            // 检查是否可以执行交易
+            let canExecute = autoTrading;
+            let notExecutedReason = "";
 
-          setSignals((prev) => {
-            const lastSignal = prev[0];
-            if (
-              lastSignal &&
-              lastSignal.symbol === trendSignal.symbol &&
-              lastSignal.direction === trendSignal.direction &&
-              Date.now() - lastSignal.time < 300000
-            ) {
-              return prev;
+            if (!autoTrading) {
+              notExecutedReason = "自动交易未开启";
+              canExecute = false;
+            } else if (positions.length >= tradingConfig.maxOpenPositions) {
+              notExecutedReason = `已达到最大持仓限制 (${tradingConfig.maxOpenPositions})`;
+              canExecute = false;
+            } else if (dailyTradesCount >= tradingConfig.dailyTradesLimit) {
+              notExecutedReason = `已达到每日交易限制 (${tradingConfig.dailyTradesLimit})`;
+              canExecute = false;
             }
-            return [{
-              ...trendSignal,
-              executed: canExecute,
-              notExecutedReason: canExecute ? undefined : notExecutedReason
-            }, ...prev.slice(0, 49)];
-          });
 
-          if (canExecute) {
-            executeTrade(trendSignal);
+            setSignals((prev) => {
+              const lastSignal = prev[0];
+              if (
+                lastSignal &&
+                lastSignal.symbol === trendSignal.symbol &&
+                lastSignal.direction === trendSignal.direction &&
+                Date.now() - lastSignal.time < 300000
+              ) {
+                return prev;
+              }
+              console.log(`[WebSocket] ${symbol} 添加新信号到列表`);
+              return [{
+                ...trendSignal,
+                executed: canExecute,
+                notExecutedReason: canExecute ? undefined : notExecutedReason
+              }, ...prev.slice(0, 49)];
+            });
+
+            if (canExecute) {
+              console.log(`[WebSocket] ${symbol} 执行交易...`);
+              executeTrade(trendSignal);
+            }
           }
         }
-      }
+
+        return newMap;
+      });
     };
 
     wsRef.current.onerror = (error) => {
-      console.error("WebSocket error:", error);
+      console.error("[WebSocket] 错误:", error);
       setError("WebSocket连接错误");
+    };
+
+    wsRef.current.onclose = () => {
+      console.log('[WebSocket] 连接关闭');
     };
   };
 
@@ -2186,10 +2275,23 @@ export default function BinanceAutoTrader() {
 
                 {autoScanAll && (
                   <div className="mt-3 p-3 bg-blue-900/20 rounded text-sm text-blue-300">
-                    <div className="font-bold mb-1">扫描规则:</div>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="font-bold">扫描规则:</div>
+                      <button
+                        onClick={scanAllSymbols}
+                        disabled={isScanning || !connected}
+                        className={`px-3 py-1 rounded text-sm transition ${
+                          isScanning
+                            ? 'bg-gray-600 cursor-not-allowed'
+                            : 'bg-blue-600 hover:bg-blue-700'
+                        }`}
+                      >
+                        {isScanning ? '扫描中...' : '立即扫描'}
+                      </button>
+                    </div>
                     <ul className="list-disc list-inside text-xs space-y-1">
-                      <li>自动扫描24h成交量最高的前20个合约</li>
-                      <li>每5分钟扫描一次，最多检查15个合约</li>
+                      <li>自动扫描24h成交量最高的前10个合约</li>
+                      <li>每5分钟扫描一次，或点击"立即扫描"手动触发</li>
                       <li>持仓数量未达限制时继续开仓 (当前: {positions.length}/{tradingConfig.maxOpenPositions})</li>
                       <li>每日交易次数未达限制时继续交易 (今日: {dailyTradesCount}/{tradingConfig.dailyTradesLimit})</li>
                       <li>发现信号但达到限制时，仍会继续扫描以发现新信号</li>
@@ -2200,6 +2302,32 @@ export default function BinanceAutoTrader() {
                 {scanProgress && (
                   <div className="mt-2 text-sm text-blue-400 animate-pulse">
                     {scanProgress}
+                  </div>
+                )}
+                {/* 扫描日志 */}
+                {scanLog.length > 0 && (
+                  <div className="mt-3 bg-gray-900 rounded-lg p-3">
+                    <div className="text-xs text-gray-400 mb-2 flex items-center justify-between">
+                      <span>扫描日志</span>
+                      <span className="text-gray-500">({scanLog.length} 条)</span>
+                    </div>
+                    <div className="space-y-1 max-h-60 overflow-y-auto text-xs font-mono">
+                      {scanLog.map((log, index) => (
+                        <div
+                          key={index}
+                          className={`${
+                            log.includes('🎯') ? 'text-yellow-400' :
+                            log.includes('✅') ? 'text-green-400' :
+                            log.includes('❌') ? 'text-red-400' :
+                            log.includes('⚠️') ? 'text-orange-400' :
+                            log.includes('📊') || log.includes('🔍') ? 'text-blue-400' :
+                            'text-gray-300'
+                          }`}
+                        >
+                          {log}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
