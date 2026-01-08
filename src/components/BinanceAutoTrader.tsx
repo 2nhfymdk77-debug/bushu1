@@ -130,6 +130,8 @@ export default function BinanceAutoTrader() {
   const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
   const [isTrading, setIsTrading] = useState(false);
   const [autoTrading, setAutoTrading] = useState(false);
+  const [autoScanAll, setAutoScanAll] = useState(false);
+  const [scanProgress, setScanProgress] = useState("");
   const [signals, setSignals] = useState<Signal[]>([]);
   const [tradeRecords, setTradeRecords] = useState<TradeRecord[]>([]);
   const [strategyParams, setStrategyParams] = useState<StrategyParams>(DEFAULT_PARAMS);
@@ -139,6 +141,7 @@ export default function BinanceAutoTrader() {
   const [error, setError] = useState("");
   const [lastSignalTime, setLastSignalTime] = useState<number>(0);
   const [dailyTradesCount, setDailyTradesCount] = useState(0);
+  const [scanIntervalRef, setScanIntervalRef] = useState<NodeJS.Timeout | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -153,6 +156,131 @@ export default function BinanceAutoTrader() {
     if (savedApiSecret) setApiSecret(savedApiSecret);
     if (savedTestnet) setTestnet(savedTestnet === "true");
   }, []);
+
+  // 自动扫描所有合约
+  const scanAllSymbols = async () => {
+    if (!connected || !autoScanAll) return;
+
+    try {
+      setScanProgress("正在获取热门合约...");
+
+      // 获取24h ticker数据
+      const tickerResponse = await fetch(
+        "https://fapi.binance.com/fapi/v1/ticker/24hr",
+        {
+          method: "GET",
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+
+      if (!tickerResponse.ok) {
+        throw new Error("获取ticker数据失败");
+      }
+
+      const tickers = await tickerResponse.json();
+
+      // 按成交量排序,取前20个USDT合约
+      const usdtTickers = tickers
+        .filter((t: any) => t.symbol.endsWith("USDT") && parseFloat(t.quoteVolume) > 10000000)
+        .sort((a: any, b: any) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
+        .slice(0, 20)
+        .map((t: any) => t.symbol);
+
+      setScanProgress(`正在扫描 ${usdtTickers.length} 个热门合约...`);
+
+      // 对每个合约进行信号检测
+      let foundSignal = false;
+      const maxCheckSymbols = Math.min(usdtTickers.length, 10); // 每次最多检查10个,避免请求过多
+
+      for (let i = 0; i < maxCheckSymbols; i++) {
+        const symbol = usdtTickers[i];
+        setScanProgress(`正在扫描 ${i + 1}/${maxCheckSymbols}: ${symbol}`);
+
+        // 获取K线数据
+        try {
+          const klineResponse = await fetch(
+            `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=100`
+          );
+
+          if (!klineResponse.ok) continue;
+
+          const klineDataRaw = await klineResponse.json();
+
+          const klines: KLineData[] = klineDataRaw.map((k: any[]) => ({
+            timestamp: k[0],
+            open: parseFloat(k[1]),
+            high: parseFloat(k[2]),
+            low: parseFloat(k[3]),
+            close: parseFloat(k[4]),
+            volume: parseFloat(k[5]),
+          }));
+
+          // 检测信号
+          if (klines.length >= strategyParams.emaLong + 10) {
+            const signal = checkSignals(symbol, klines);
+            if (signal) {
+              // 添加到信号列表
+              setSignals((prev) => {
+                const exists = prev.some(s =>
+                  s.symbol === signal.symbol &&
+                  s.direction === signal.direction &&
+                  Date.now() - s.time < 300000
+                );
+                if (!exists) {
+                  return [signal, ...prev.slice(0, 49)];
+                }
+                return prev;
+              });
+
+              // 执行交易
+              if (autoTrading) {
+                await executeTrade(signal);
+                foundSignal = true;
+                break; // 找到一个信号后停止扫描,避免同时交易多个
+              }
+            }
+          }
+        } catch (err) {
+          console.error(`扫描${symbol}失败:`, err);
+        }
+
+        // 避免请求过快
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+
+      setScanProgress(foundSignal ? "扫描完成,发现交易信号" : "扫描完成,暂无交易信号");
+
+      // 5秒后清除扫描状态
+      setTimeout(() => setScanProgress(""), 5000);
+    } catch (err: any) {
+      console.error("自动扫描失败:", err);
+      setScanProgress("扫描失败: " + (err.message || "未知错误"));
+      setTimeout(() => setScanProgress(""), 5000);
+    }
+  };
+
+  // 监听自动扫描开关
+  useEffect(() => {
+    if (autoScanAll && isTrading && connected && autoTrading) {
+      // 立即执行一次扫描
+      scanAllSymbols();
+
+      // 每5分钟扫描一次
+      const interval = setInterval(scanAllSymbols, 5 * 60 * 1000);
+      setScanIntervalRef(interval);
+    } else {
+      if (scanIntervalRef) {
+        clearInterval(scanIntervalRef);
+        setScanIntervalRef(null);
+      }
+    }
+
+    return () => {
+      if (scanIntervalRef) {
+        clearInterval(scanIntervalRef);
+      }
+    };
+  }, [autoScanAll, isTrading, connected, autoTrading]);
 
   // 每日重置交易计数
   useEffect(() => {
@@ -602,6 +730,11 @@ export default function BinanceAutoTrader() {
     }
   };
 
+  // 手动重置每日交易计数
+  const resetDailyTradesCount = () => {
+    setDailyTradesCount(0);
+  };
+
   // 开始/停止监控
   const toggleMonitoring = () => {
     if (isTrading) {
@@ -636,8 +769,11 @@ export default function BinanceAutoTrader() {
       if (refreshIntervalRef.current) {
         clearInterval(refreshIntervalRef.current);
       }
+      if (scanIntervalRef) {
+        clearInterval(scanIntervalRef);
+      }
     };
-  }, []);
+  }, [scanIntervalRef]);
 
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleString("zh-CN");
@@ -907,15 +1043,40 @@ export default function BinanceAutoTrader() {
               />
             </div>
             <div>
-              <label className="block text-sm text-gray-400 mb-1">每日交易限制</label>
-              <input
-                type="number"
-                value={tradingConfig.dailyTradesLimit}
-                onChange={(e) =>
-                  setTradingConfig({ ...tradingConfig, dailyTradesLimit: Number(e.target.value) })
-                }
-                className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-              />
+              <label className="block text-sm text-gray-400 mb-1">
+                每日交易限制
+                <span className="text-xs text-gray-500 ml-2">
+                  (已用: <span className={dailyTradesCount >= tradingConfig.dailyTradesLimit ? "text-red-500 font-bold" : "text-green-500"}>{dailyTradesCount}</span>)
+                </span>
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  value={tradingConfig.dailyTradesLimit}
+                  onChange={(e) =>
+                    setTradingConfig({ ...tradingConfig, dailyTradesLimit: Number(e.target.value) })
+                  }
+                  className="flex-1 bg-gray-700 rounded px-3 py-2 text-white"
+                  min="1"
+                />
+                <button
+                  onClick={resetDailyTradesCount}
+                  disabled={dailyTradesCount === 0}
+                  className={`px-3 py-2 rounded transition ${
+                    dailyTradesCount === 0
+                      ? "bg-gray-600 cursor-not-allowed text-gray-400"
+                      : "bg-yellow-600 hover:bg-yellow-700 text-white"
+                  }`}
+                  title="重置今日交易计数"
+                >
+                  重置
+                </button>
+              </div>
+              {dailyTradesCount >= tradingConfig.dailyTradesLimit && (
+                <div className="mt-1 text-xs text-red-500">
+                  ⚠️ 已达到每日交易限制,自动交易将暂停
+                </div>
+              )}
             </div>
           </div>
 
@@ -1032,6 +1193,39 @@ export default function BinanceAutoTrader() {
                   <span className="text-gray-400">运行时间: </span>
                   <span className="text-white">{new Date().toLocaleTimeString()}</span>
                 </div>
+              </div>
+
+              {/* 自动扫描控制 */}
+              <div className="mt-4 pt-4 border-t border-gray-600">
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoScanAll}
+                      onChange={(e) => setAutoScanAll(e.target.checked)}
+                      disabled={!autoTrading}
+                      className="w-4 h-4"
+                    />
+                    <span className={`text-sm ${autoScanAll ? "text-blue-500 font-bold" : "text-gray-300"}`}>
+                      自动扫描所有合约 (每5分钟)
+                    </span>
+                  </label>
+
+                  {dailyTradesCount > 0 && (
+                    <button
+                      onClick={resetDailyTradesCount}
+                      className="px-4 py-1 bg-yellow-600 hover:bg-yellow-700 rounded text-sm transition"
+                    >
+                      重置交易计数器
+                    </button>
+                  )}
+                </div>
+
+                {scanProgress && (
+                  <div className="mt-2 text-sm text-blue-400 animate-pulse">
+                    {scanProgress}
+                  </div>
+                )}
               </div>
             </div>
           )}
