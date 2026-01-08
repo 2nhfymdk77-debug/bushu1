@@ -28,8 +28,10 @@ interface StrategyParams {
   enableRSIFilter: boolean;
   minRSI: number;
   maxRSI: number;
+  rsiThreshold: number; // RSI阈值（用于判断超买超卖，默认50）
   enablePriceEMAFilter: boolean;
   enableTouchedEmaFilter: boolean;
+  emaTouchLookback: number; // 回踩检测的K线数量（默认3根）
   enableCandleColorFilter: boolean;
   minCandleChangePercent: number;
 }
@@ -50,8 +52,10 @@ const DEFAULT_PARAMS: StrategyParams = {
   enableRSIFilter: true,
   minRSI: 30,
   maxRSI: 70,
+  rsiThreshold: 50, // RSI阈值：低于50为超卖，高于50为超买
   enablePriceEMAFilter: true,
   enableTouchedEmaFilter: true,
+  emaTouchLookback: 3, // 回踩检测的K线数量
   enableCandleColorFilter: true,
   minCandleChangePercent: 0.1,
 };
@@ -1158,20 +1162,20 @@ export default function BinanceAutoTrader() {
         failedChecks.push(`价格${current.close.toFixed(2)}不在EMA20(${emaS.toFixed(2)})上方`);
       }
 
-      // 条件1：RSI从超卖区反弹（RSI < 50 且 RSI上升）
-      const rsiRecovery = rsi < 50 && rsi > rsiPrev;
+      // 条件1：RSI从超卖区反弹（RSI < 阈值 且 RSI上升）
+      const rsiRecovery = rsi < strategyParams.rsiThreshold && rsi > rsiPrev;
       if (strategyParams.enableRSIFilter && !rsiRecovery) {
-        if (rsi >= 50) {
-          failedChecks.push(`RSI=${rsi.toFixed(1)}不在超卖区(需要<50)`);
+        if (rsi >= strategyParams.rsiThreshold) {
+          failedChecks.push(`RSI=${rsi.toFixed(1)}不在超卖区(需要<${strategyParams.rsiThreshold})`);
         } else if (rsi <= rsiPrev) {
           failedChecks.push(`RSI未反弹(${rsi.toFixed(1)} <= ${rsiPrev.toFixed(1)})`);
         }
       }
 
-      // 条件2：最近3根K线有回踩（价格曾触及EMA20）
+      // 条件2：最近N根K线有回踩（价格曾触及EMA20）
       const touchedEma = prev.low <= emaS || prev2.low <= emaS;
       if (strategyParams.enableTouchedEmaFilter && !touchedEma) {
-        failedChecks.push(`最近3根K线未触及EMA20(${prev2.low.toFixed(2)}, ${prev.low.toFixed(2)} > ${emaS.toFixed(2)})`);
+        failedChecks.push(`最近${strategyParams.emaTouchLookback}根K线未触及EMA20(${prev2.low.toFixed(2)}, ${prev.low.toFixed(2)} > ${emaS.toFixed(2)})`);
       }
 
       // 条件3：阳线确认（当前K线收阳且涨幅 > 0.1%）
@@ -1219,11 +1223,11 @@ export default function BinanceAutoTrader() {
         failedChecks.push(`价格${current.close.toFixed(2)}不在EMA20(${emaS.toFixed(2)})下方`);
       }
 
-      // 条件1：RSI从超买区回落（RSI > 50 且 RSI下降）
-      const rsiDecline = rsi > 50 && rsi < rsiPrev;
+      // 条件1：RSI从超买区回落（RSI > 阈值 且 RSI下降）
+      const rsiDecline = rsi > strategyParams.rsiThreshold && rsi < rsiPrev;
       if (strategyParams.enableRSIFilter && !rsiDecline) {
-        if (rsi <= 50) {
-          failedChecks.push(`RSI=${rsi.toFixed(1)}不在超买区(需要>50)`);
+        if (rsi <= strategyParams.rsiThreshold) {
+          failedChecks.push(`RSI=${rsi.toFixed(1)}不在超买区(需要>${strategyParams.rsiThreshold})`);
         } else if (rsi >= rsiPrev) {
           failedChecks.push(`RSI未回落(${rsi.toFixed(1)} >= ${rsiPrev.toFixed(1)})`);
         }
@@ -2263,8 +2267,9 @@ export default function BinanceAutoTrader() {
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
+              {/* 价格与EMA关系 */}
+              <div className="bg-gray-700/50 rounded-lg p-3">
+                <label className="flex items-center gap-2 cursor-pointer mb-2">
                   <input
                     type="checkbox"
                     checked={strategyParams.enablePriceEMAFilter}
@@ -2275,12 +2280,15 @@ export default function BinanceAutoTrader() {
                   />
                   <span className="text-sm text-gray-300">价格与EMA关系</span>
                 </label>
-                <div className="text-xs text-gray-500 mt-1 ml-6">
-                  多头: 价格 {'>'} EMA20 | 空头: 价格 {'<'} EMA20
+                <div className="text-xs text-gray-500 ml-6">
+                  <div>多头: 价格 {'>'} EMA20</div>
+                  <div>空头: 价格 {'<'} EMA20</div>
                 </div>
               </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
+
+              {/* RSI超买超卖检测 */}
+              <div className="bg-gray-700/50 rounded-lg p-3">
+                <label className="flex items-center gap-2 cursor-pointer mb-2">
                   <input
                     type="checkbox"
                     checked={strategyParams.enableRSIFilter}
@@ -2291,12 +2299,35 @@ export default function BinanceAutoTrader() {
                   />
                   <span className="text-sm text-gray-300">RSI超买超卖检测</span>
                 </label>
-                <div className="text-xs text-gray-500 mt-1 ml-6">
-                  多头: RSI {'<'} 50 且上升 | 空头: RSI {'>'} 50 且下降
+                <div className="text-xs text-gray-500 ml-6 space-y-1">
+                  <div>多头: RSI {'<'} 阈值 且上升</div>
+                  <div>空头: RSI {'>'} 阈值 且下降</div>
+                  {strategyParams.enableRSIFilter && (
+                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-600">
+                      <span>阈值:</span>
+                      <input
+                        type="number"
+                        step="1"
+                        min="0"
+                        max="100"
+                        value={strategyParams.rsiThreshold}
+                        onChange={(e) =>
+                          setStrategyParams({
+                            ...strategyParams,
+                            rsiThreshold: Math.min(100, Math.max(0, Number(e.target.value)))
+                          })
+                        }
+                        className="w-16 bg-gray-600 rounded px-2 py-1 text-xs text-white"
+                      />
+                      <span>(默认50)</span>
+                    </div>
+                  )}
                 </div>
               </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
+
+              {/* EMA回踩/反弹检测 */}
+              <div className="bg-gray-700/50 rounded-lg p-3">
+                <label className="flex items-center gap-2 cursor-pointer mb-2">
                   <input
                     type="checkbox"
                     checked={strategyParams.enableTouchedEmaFilter}
@@ -2307,12 +2338,35 @@ export default function BinanceAutoTrader() {
                   />
                   <span className="text-sm text-gray-300">EMA回踩/反弹检测</span>
                 </label>
-                <div className="text-xs text-gray-500 mt-1 ml-6">
-                  多头: 最近3根触及EMA20下方 | 空头: 最近3根触及EMA20上方
+                <div className="text-xs text-gray-500 ml-6 space-y-1">
+                  <div>多头: 最近N根触及EMA20下方</div>
+                  <div>空头: 最近N根触及EMA20上方</div>
+                  {strategyParams.enableTouchedEmaFilter && (
+                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-600">
+                      <span>K线数量:</span>
+                      <input
+                        type="number"
+                        step="1"
+                        min="2"
+                        max="10"
+                        value={strategyParams.emaTouchLookback}
+                        onChange={(e) =>
+                          setStrategyParams({
+                            ...strategyParams,
+                            emaTouchLookback: Math.min(10, Math.max(2, Number(e.target.value)))
+                          })
+                        }
+                        className="w-16 bg-gray-600 rounded px-2 py-1 text-xs text-white"
+                      />
+                      <span>根(默认3)</span>
+                    </div>
+                  )}
                 </div>
               </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
+
+              {/* K线颜色确认 */}
+              <div className="bg-gray-700/50 rounded-lg p-3">
+                <label className="flex items-center gap-2 cursor-pointer mb-2">
                   <input
                     type="checkbox"
                     checked={strategyParams.enableCandleColorFilter}
@@ -2323,21 +2377,27 @@ export default function BinanceAutoTrader() {
                   />
                   <span className="text-sm text-gray-300">K线颜色确认</span>
                 </label>
-                <div className="text-xs text-gray-500 mt-1 ml-6 flex items-center gap-2">
-                  <span>多头: 阳线 | 空头: 阴线</span>
-                  <span className="text-gray-400">|</span>
-                  <span>最小涨跌幅: </span>
-                  <input
-                    type="number"
-                    step="0.05"
-                    min="0"
-                    value={strategyParams.minCandleChangePercent}
-                    onChange={(e) =>
-                      setStrategyParams({ ...strategyParams, minCandleChangePercent: Math.max(0, Number(e.target.value)) })
-                    }
-                    className="w-16 bg-gray-600 rounded px-2 py-1 text-xs text-white"
-                  />
-                  <span>%</span>
+                <div className="text-xs text-gray-500 ml-6 space-y-1">
+                  <div>多头: 阳线 | 空头: 阴线</div>
+                  {strategyParams.enableCandleColorFilter && (
+                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-600">
+                      <span>最小涨跌幅:</span>
+                      <input
+                        type="number"
+                        step="0.05"
+                        min="0"
+                        value={strategyParams.minCandleChangePercent}
+                        onChange={(e) =>
+                          setStrategyParams({
+                            ...strategyParams,
+                            minCandleChangePercent: Math.max(0, Number(e.target.value))
+                          })
+                        }
+                        className="w-16 bg-gray-600 rounded px-2 py-1 text-xs text-white"
+                      />
+                      <span>% (默认0.1)</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2348,8 +2408,9 @@ export default function BinanceAutoTrader() {
                 <li>进场逻辑采用"满足N个条件"机制，而不是"全部满足"</li>
                 <li>关闭某个条件后，该条件不再作为筛选标准，相当于自动通过</li>
                 <li>建议至少开启2-3个条件，以保证信号质量</li>
-                <li>降低最小涨跌幅阈值可提高触发频率，但可能增加假信号</li>
-                <li>扫描日志会详细列出每个合约未满足的具体条件</li>
+                <li>每个条件都支持独立参数配置（如RSI阈值、K线数量、涨跌幅等）</li>
+                <li>参数调整会立即生效，扫描日志会实时显示检测结果</li>
+                <li>降低阈值可提高触发频率，但可能增加假信号；提高阈值可提高信号质量，但会减少交易机会</li>
               </ul>
             </div>
           </div>
