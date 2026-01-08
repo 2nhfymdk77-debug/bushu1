@@ -64,7 +64,9 @@ interface FuturesSymbol {
   symbol: string;
   contractType: string;
   status: string;
-  pricePrecision: number;
+  pricePrecision: number;    // 价格精度（小数位数）
+  quantityPrecision: number; // 数量精度（小数位数）
+  quotePrecision: number;    // 报价精度（小数位数）
   tickSize: string;
   quoteAsset: string;
 }
@@ -714,7 +716,7 @@ export default function BinanceAutoTrader() {
 
       // 获取交易对精度信息
       const symbolInfo = symbols.find(s => s.symbol === position.symbol);
-      const quantityPrecision = symbolInfo?.pricePrecision || 3;
+      const quantityPrecision = symbolInfo?.quantityPrecision ?? 3;
 
       // 格式化数量
       const formattedQuantity = parseFloat(closeQuantity.toFixed(quantityPrecision));
@@ -809,7 +811,7 @@ export default function BinanceAutoTrader() {
 
       // 获取交易对精度信息
       const symbolInfo = symbols.find(s => s.symbol === position.symbol);
-      const quantityPrecision = symbolInfo?.pricePrecision || 3;
+      const quantityPrecision = symbolInfo?.quantityPrecision ?? 3;
 
       // 格式化数量
       const formattedQuantity = parseFloat(quantity.toFixed(quantityPrecision));
@@ -1546,7 +1548,7 @@ export default function BinanceAutoTrader() {
 
       const availableBalance = accountBalance.available;
       const positionValue = availableBalance * (tradingConfig.positionSizePercent / 100);
-      const quantity = positionValue / signal.entryPrice;
+      let quantity = positionValue / signal.entryPrice;
 
       // 计算止损止盈
       const stopLossPrice = signal.direction === "long"
@@ -1558,11 +1560,23 @@ export default function BinanceAutoTrader() {
 
       // 获取交易对精度信息
       const symbolInfo = symbols.find(s => s.symbol === signal.symbol);
-      const quantityPrecision = symbolInfo?.pricePrecision || 3; // 币安返回的是quantity precision，但这里用了pricePrecision字段名
-      const pricePrecision = 8; // 价格精度通常为8
+      const quantityPrecision = symbolInfo?.quantityPrecision ?? 3;
+      const pricePrecision = symbolInfo?.pricePrecision ?? 8;
 
-      // 格式化数量和价格
-      const formattedQuantity = parseFloat(quantity.toFixed(quantityPrecision));
+      // 格式化数量，确保符合精度要求
+      let formattedQuantity = parseFloat(quantity.toFixed(quantityPrecision));
+
+      // 检查订单名义价值是否 >= 20 USDT
+      const notional = formattedQuantity * signal.entryPrice;
+      const minNotional = 20; // 币安期货最小名义价值
+
+      if (notional < minNotional) {
+        // 调整数量以满足最小名义价值要求
+        const adjustedQuantity = minNotional / signal.entryPrice;
+        formattedQuantity = parseFloat(adjustedQuantity.toFixed(quantityPrecision));
+        console.log(`[executeSignal] 订单名义价值不足（${notional.toFixed(2)} < ${minNotional}），调整为 ${formattedQuantity}`);
+      }
+
       const formattedPrice = parseFloat(signal.entryPrice.toFixed(pricePrecision));
 
       // 市价单不发送止盈止损参数
@@ -1585,7 +1599,8 @@ export default function BinanceAutoTrader() {
         side,
         type,
         quantity: formattedQuantity,
-        price: type === "LIMIT" ? formattedPrice : undefined
+        price: type === "LIMIT" ? formattedPrice : undefined,
+        notional: (formattedQuantity * signal.entryPrice).toFixed(2)
       });
 
       // 真实下单
