@@ -149,6 +149,8 @@ interface TradingConfig {
   useTrailingStop: boolean;       // 使用移动止损
   trailingStopTriggerR: number;   // 触发移动止损的R值（如1R）
   trailingStopMoveToBreakeven: boolean; // 达到1R后移动到保本价
+  // 扫描配置
+  scanIntervalMinutes: number;   // 自动扫描间隔时间（分钟）
 }
 
 const DEFAULT_TRADING_CONFIG: TradingConfig = {
@@ -171,6 +173,8 @@ const DEFAULT_TRADING_CONFIG: TradingConfig = {
   useTrailingStop: true,
   trailingStopTriggerR: 1,  // 1R时触发移动止损
   trailingStopMoveToBreakeven: true, // 达到1R后移动到保本价
+  // 扫描配置
+  scanIntervalMinutes: 5,  // 默认每5分钟扫描一次
 };
 
 export default function BinanceAutoTrader() {
@@ -459,8 +463,11 @@ export default function BinanceAutoTrader() {
       // 立即执行一次扫描
       scanAllSymbols();
 
-      // 每5分钟扫描一次
-      const interval = setInterval(scanAllSymbols, 5 * 60 * 1000);
+      // 根据配置的时间间隔扫描
+      const interval = setInterval(
+        scanAllSymbols,
+        tradingConfig.scanIntervalMinutes * 60 * 1000
+      );
       setScanIntervalRef(interval);
     } else {
       if (scanIntervalRef) {
@@ -2588,9 +2595,37 @@ export default function BinanceAutoTrader() {
                         {isScanning ? '扫描中...' : '立即扫描'}
                       </button>
                     </div>
+
+                    {/* 扫描间隔配置 */}
+                    <div className="mb-3 p-2 bg-green-800/30 rounded">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="font-bold">⏱️ 扫描间隔时间:</span>
+                        <select
+                          value={tradingConfig.scanIntervalMinutes}
+                          onChange={(e) =>
+                            setTradingConfig({
+                              ...tradingConfig,
+                              scanIntervalMinutes: Number(e.target.value)
+                            })
+                          }
+                          className="bg-gray-700 text-white px-2 py-1 rounded text-sm"
+                        >
+                          <option value={1}>1 分钟（高频扫描）</option>
+                          <option value={5}>5 分钟（默认）</option>
+                          <option value={15}>15 分钟</option>
+                          <option value={30}>30 分钟</option>
+                          <option value={60}>1 小时</option>
+                          <option value={240}>4 小时</option>
+                        </select>
+                      </div>
+                      <div className="text-xs text-green-200/70">
+                        💡 提示：扫描间隔越短，发现交易机会的速度越快，但API请求频率也会增加。建议根据策略频率选择合适的时间间隔。
+                      </div>
+                    </div>
+
                     <ul className="list-disc list-inside text-xs space-y-1">
                       <li><strong>扫描范围：</strong>24h成交量最高的前10个USDT合约</li>
-                      <li><strong>执行频率：</strong>每5分钟自动扫描一次，也可手动触发</li>
+                      <li><strong>执行频率：</strong>每{tradingConfig.scanIntervalMinutes < 60 ? `${tradingConfig.scanIntervalMinutes}分钟` : `${tradingConfig.scanIntervalMinutes / 60}小时`}自动扫描一次，也可手动触发</li>
                       <li><strong>交易限制：</strong>
                         <ul className="list-decimal list-inside ml-4 mt-1 space-y-1">
                           <li>持仓数量：当前 {positions.length}/{tradingConfig.maxOpenPositions}</li>
