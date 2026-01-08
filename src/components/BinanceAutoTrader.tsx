@@ -712,6 +712,13 @@ export default function BinanceAutoTrader() {
       const totalQuantity = Math.abs(position.positionAmt);
       const closeQuantity = totalQuantity * percent;
 
+      // 获取交易对精度信息
+      const symbolInfo = symbols.find(s => s.symbol === position.symbol);
+      const quantityPrecision = symbolInfo?.pricePrecision || 3;
+
+      // 格式化数量
+      const formattedQuantity = parseFloat(closeQuantity.toFixed(quantityPrecision));
+
       // 真实平仓
       const response = await fetch("/api/binance/order", {
         method: "POST",
@@ -722,7 +729,7 @@ export default function BinanceAutoTrader() {
           symbol: position.symbol,
           side,
           type: "MARKET",
-          quantity: closeQuantity.toFixed(3),
+          quantity: formattedQuantity,
         }),
       });
 
@@ -800,6 +807,13 @@ export default function BinanceAutoTrader() {
       const side = isLong ? "SELL" : "BUY";
       const quantity = Math.abs(position.positionAmt);
 
+      // 获取交易对精度信息
+      const symbolInfo = symbols.find(s => s.symbol === position.symbol);
+      const quantityPrecision = symbolInfo?.pricePrecision || 3;
+
+      // 格式化数量
+      const formattedQuantity = parseFloat(quantity.toFixed(quantityPrecision));
+
       // 真实平仓
       const response = await fetch("/api/binance/order", {
         method: "POST",
@@ -810,7 +824,7 @@ export default function BinanceAutoTrader() {
           symbol: position.symbol,
           side,
           type: "MARKET",
-          quantity: quantity.toFixed(3),
+          quantity: formattedQuantity,
         }),
       });
 
@@ -1542,20 +1556,43 @@ export default function BinanceAutoTrader() {
         ? signal.entryPrice * (1 + tradingConfig.takeProfitPercent / 100)
         : signal.entryPrice * (1 - tradingConfig.takeProfitPercent / 100);
 
+      // 获取交易对精度信息
+      const symbolInfo = symbols.find(s => s.symbol === signal.symbol);
+      const quantityPrecision = symbolInfo?.pricePrecision || 3; // 币安返回的是quantity precision，但这里用了pricePrecision字段名
+      const pricePrecision = 8; // 价格精度通常为8
+
+      // 格式化数量和价格
+      const formattedQuantity = parseFloat(quantity.toFixed(quantityPrecision));
+      const formattedPrice = parseFloat(signal.entryPrice.toFixed(pricePrecision));
+
+      // 市价单不发送止盈止损参数
+      const requestBody: any = {
+        apiKey,
+        apiSecret,
+        symbol: signal.symbol,
+        side,
+        type,
+        quantity: formattedQuantity,
+      };
+
+      // 只有限价单才发送价格
+      if (type === "LIMIT") {
+        requestBody.price = formattedPrice;
+      }
+
+      console.log('[executeSignal] 下单参数:', {
+        symbol: signal.symbol,
+        side,
+        type,
+        quantity: formattedQuantity,
+        price: type === "LIMIT" ? formattedPrice : undefined
+      });
+
       // 真实下单
       const response = await fetch("/api/binance/order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          apiKey,
-          apiSecret,
-          symbol: signal.symbol,
-          side,
-          type,
-          quantity: quantity.toFixed(3),
-          stopLoss: stopLossPrice.toFixed(2),
-          takeProfit: takeProfitPrice.toFixed(2),
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       const result = await response.json();

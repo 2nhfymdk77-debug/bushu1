@@ -55,17 +55,24 @@ export async function POST(request: NextRequest) {
       type,
     };
 
+    // LIMIT订单需要价格
     if (price && type === "LIMIT") {
       params.price = price.toString();
     }
 
-    if (stopLoss) {
+    // 只有STOP类型订单才需要stopPrice
+    if ((type === "STOP" || type === "STOP_MARKET" || type === "STOP_LIMIT") && stopLoss) {
       params.stopPrice = stopLoss.toString();
+    }
+
+    // STOP_LIMIT类型需要stopLimitPrice
+    if (type === "STOP_LIMIT" && stopLoss) {
       params.stopLimitPrice = stopLoss.toString();
       params.stopLimitTimeInForce = "GTC";
     }
 
-    if (takeProfit) {
+    // TAKE_PROFIT类型订单需要takeProfitPrice
+    if ((type === "TAKE_PROFIT" || type === "TAKE_PROFIT_MARKET") && takeProfit) {
       params.takeProfitPrice = takeProfit.toString();
     }
 
