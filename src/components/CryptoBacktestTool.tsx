@@ -123,58 +123,68 @@ export default function CryptoBacktestTool() {
 
   // 计算EMA
   const calculateEMA = (data: KLine[], period: number): number[] => {
-    const ema: number[] = [];
+    const ema: number[] = new Array(data.length).fill(0);
     const multiplier = 2 / (period + 1);
-    
-    // 第一个EMA值使用SMA
+
+    // 计算第一个EMA值（使用SMA）
     let sum = 0;
     for (let i = 0; i < period && i < data.length; i++) {
       sum += data[i].close;
     }
-    ema.push(sum / Math.min(period, data.length));
-    
+    ema[period - 1] = sum / Math.min(period, data.length);
+
+    // 填充前面的值（使用第一个EMA值）
+    for (let i = 0; i < period - 1; i++) {
+      ema[i] = ema[period - 1];
+    }
+
     // 后续EMA值
     for (let i = period; i < data.length; i++) {
-      const currentEMA = (data[i].close - ema[i - period]) * multiplier + ema[i - period];
-      ema.push(currentEMA);
+      ema[i] = (data[i].close - ema[i - 1]) * multiplier + ema[i - 1];
     }
-    
-    // 填充前面的值
-    for (let i = 0; i < period - 1 && ema.length < data.length; i++) {
-      ema.unshift(ema[0]);
-    }
-    
+
     return ema;
   };
 
   // 计算RSI
   const calculateRSI = (data: KLine[], period: number): number[] => {
-    const rsi: number[] = [];
+    const rsi: number[] = new Array(data.length).fill(50);
     const gains: number[] = [];
     const losses: number[] = [];
-    
+
     for (let i = 1; i < data.length; i++) {
       const change = data[i].close - data[i - 1].close;
       gains.push(change > 0 ? change : 0);
       losses.push(change < 0 ? Math.abs(change) : 0);
     }
-    
+
+    if (gains.length < period) {
+      return rsi;
+    }
+
     // 初始平均
     let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
     let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
-    
-    for (let i = 0; i < period - 1; i++) {
-      rsi.push(50);
+
+    // 计算第一个RSI值
+    let firstRSI: number;
+    if (avgLoss === 0) {
+      firstRSI = 100;
+    } else {
+      const rs = avgGain / avgLoss;
+      firstRSI = 100 - 100 / (1 + rs);
     }
-    
+    rsi[period] = firstRSI;
+
+    // 后续RSI值
     for (let i = period; i < gains.length; i++) {
       avgGain = (avgGain * (period - 1) + gains[i]) / period;
       avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
-      
+
       const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
-      rsi.push(100 - 100 / (1 + rs));
+      rsi[i + 1] = 100 - 100 / (1 + rs);
     }
-    
+
     return rsi;
   };
 
