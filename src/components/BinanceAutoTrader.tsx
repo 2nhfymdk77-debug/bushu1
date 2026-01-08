@@ -236,6 +236,13 @@ export default function BinanceAutoTrader() {
       setScanLog(prev => [`[${timestamp}] ${msg}`, ...prev.slice(0, 19)]);
     };
 
+    const addDetailLog = (msg: string, level: 'info' | 'success' | 'error' | 'warning' = 'info') => {
+      const timestamp = new Date().toLocaleTimeString();
+      const prefix = level === 'error' ? '❌' : level === 'success' ? '✅' : level === 'warning' ? '⚠️' : 'ℹ️';
+      console.log(`[Scan] [${timestamp}] ${prefix} ${msg}`);
+      setScanLog(prev => [`[${timestamp}] ${prefix} ${msg}`, ...prev.slice(0, 49)]);
+    };
+
     try {
       addLog("🚀 开始扫描热门合约...");
       setScanProgress("正在获取热门合约...");
@@ -293,7 +300,7 @@ export default function BinanceAutoTrader() {
           continue;
         }
 
-        // 获取K线数据（同时获取15分钟和5分钟）
+        // 获取K线数据（同时获取15分钟和5分钟）- 独立 try-catch
         try {
           addLog(`  📡 获取 ${symbol} K线数据...`);
           const startTime = Date.now();
@@ -304,7 +311,7 @@ export default function BinanceAutoTrader() {
           ]);
 
           if (!kline15mResponse.ok || !kline5mResponse.ok) {
-            addLog(`  ❌ ${symbol} K线数据获取失败`);
+            addDetailLog(`${symbol} K线数据获取失败 (15m:${kline15mResponse.status}, 5m:${kline5mResponse.status})`, 'error');
             continue;
           }
 
@@ -332,77 +339,91 @@ export default function BinanceAutoTrader() {
           }));
 
           const fetchTime = Date.now() - startTime;
-          addLog(`  ✅ ${symbol} K线数据获取完成 (${fetchTime}ms, 15m:${klines15m.length}, 5m:${klines5m.length})`);
+          addDetailLog(`${symbol} K线数据获取完成 (${fetchTime}ms, 15m:${klines15m.length}, 5m:${klines5m.length})`, 'info');
 
-          // 检测信号（多时间框架：15分钟趋势 + 5分钟回调进场）
-          if (klines15m.length >= strategyParams.emaLong + 10 &&
-              klines5m.length >= strategyParams.emaLong + 10) {
-            addLog(`  🔎 ${symbol} 开始信号检测...`);
-            const { signal, reason, details } = checkSignals(symbol, klines15m, klines5m);
+          // 检测信号（多时间框架：15分钟趋势 + 5分钟回调进场）- 独立 try-catch
+          try {
+            if (klines15m.length >= strategyParams.emaLong + 10 &&
+                klines5m.length >= strategyParams.emaLong + 10) {
+              addDetailLog(`${symbol} 开始信号检测...`, 'info');
+              const { signal, reason, details } = checkSignals(symbol, klines15m, klines5m);
 
-            if (signal) {
-              signalsFound++;
-              addLog(`  🎯 ${symbol} 发现${signal.direction === 'long' ? '多头' : '空头'}信号! 价格: ${signal.entryPrice}`);
-              addLog(`  📋 信号原因: ${signal.reason}`);
-              addLog(`  📝 详细信息: ${details}`);
+              if (signal) {
+                signalsFound++;
+                addDetailLog(`${symbol} 发现${signal.direction === 'long' ? '多头' : '空头'}信号! 价格: ${signal.entryPrice}`, 'success');
+                addDetailLog(`${symbol} 信号原因: ${signal.reason}`, 'info');
+                addDetailLog(`${symbol} 详细信息: ${details}`, 'info');
 
-              // 检查是否可以执行交易
-              let canExecute = autoTrading;
-              let notExecutedReason = "";
+                // 检查是否可以执行交易
+                let canExecute = autoTrading;
+                let notExecutedReason = "";
 
-              if (!autoTrading) {
-                notExecutedReason = "自动交易未开启";
-                canExecute = false;
-              } else if (positions.length >= tradingConfig.maxOpenPositions) {
-                notExecutedReason = `已达到最大持仓限制 (${tradingConfig.maxOpenPositions})`;
-                canExecute = false;
-              } else if (dailyTradesCount >= tradingConfig.dailyTradesLimit) {
-                notExecutedReason = `已达到每日交易限制 (${tradingConfig.dailyTradesLimit})`;
-                canExecute = false;
-              }
-
-              // 添加到信号列表
-              setSignals((prev) => {
-                const exists = prev.some(s =>
-                  s.symbol === signal.symbol &&
-                  s.direction === signal.direction &&
-                  Date.now() - s.time < 300000
-                );
-                if (!exists) {
-                  return [{
-                    ...signal,
-                    executed: canExecute,
-                    notExecutedReason: canExecute ? undefined : notExecutedReason
-                  }, ...prev.slice(0, 49)];
+                if (!autoTrading) {
+                  notExecutedReason = "自动交易未开启";
+                  canExecute = false;
+                } else if (positions.length >= tradingConfig.maxOpenPositions) {
+                  notExecutedReason = `已达到最大持仓限制 (${tradingConfig.maxOpenPositions})`;
+                  canExecute = false;
+                } else if (dailyTradesCount >= tradingConfig.dailyTradesLimit) {
+                  notExecutedReason = `已达到每日交易限制 (${tradingConfig.dailyTradesLimit})`;
+                  canExecute = false;
                 }
-                return prev;
-              });
 
-              // 执行交易（仅在未达到限制时）
-              if (canExecute) {
-                addLog(`  📝 ${symbol} 执行交易...`);
-                try {
-                  await executeTrade(signal);
-                  tradesExecuted++;
-                  addLog(`  ✅ ${symbol} 交易执行完成`);
-                } catch (err: any) {
-                  addLog(`  ❌ ${symbol} 交易执行失败: ${err.message}`);
+                // 添加到信号列表
+                setSignals((prev) => {
+                  const exists = prev.some(s =>
+                    s.symbol === signal.symbol &&
+                    s.direction === signal.direction &&
+                    Date.now() - s.time < 300000
+                  );
+                  if (!exists) {
+                    return [{
+                      ...signal,
+                      executed: canExecute,
+                      notExecutedReason: canExecute ? undefined : notExecutedReason
+                    }, ...prev.slice(0, 49)];
+                  }
+                  return prev;
+                });
+
+                // 执行交易（仅在未达到限制时）- 独立 try-catch
+                if (canExecute) {
+                  addDetailLog(`${symbol} 准备执行交易...`, 'info');
+                  try {
+                    await executeTrade(signal);
+                    tradesExecuted++;
+                    addDetailLog(`${symbol} 交易执行完成`, 'success');
+                  } catch (err: any) {
+                    addDetailLog(`${symbol} 交易执行失败: ${err.message}`, 'error');
+                    console.error(`交易执行失败 (${symbol}):`, err);
+                  }
+                } else {
+                  addDetailLog(`${symbol} 跳过交易: ${notExecutedReason}`, 'warning');
                 }
               } else {
-                addLog(`  ⏭️ ${symbol} 跳过交易: ${notExecutedReason}`);
+                // 显示更详细的未触发原因
+                addDetailLog(`${symbol} 无信号`, 'warning');
+                addDetailLog(`${symbol} 检测结果: ${reason}`, 'info');
+                // 将详细信息拆分成多行显示，提高可读性
+                if (details.includes(';')) {
+                  const detailLines = details.split(';');
+                  detailLines.forEach(line => {
+                    addDetailLog(`${symbol} - ${line.trim()}`, 'info');
+                  });
+                } else {
+                  addDetailLog(`${symbol} 详细原因: ${details}`, 'info');
+                }
               }
             } else {
-              // 显示更详细的未触发原因
-              addLog(`  ✖️ ${symbol} 无信号`);
-              addLog(`  📊 检测结果: ${reason}`);
-              addLog(`  📝 详细原因: ${details}`);
+              addDetailLog(`${symbol} K线数据不足 (需要 ${strategyParams.emaLong + 10} 条, 实际 15m:${klines15m.length}, 5m:${klines5m.length})`, 'warning');
             }
-          } else {
-            addLog(`  ⚠️ ${symbol} K线数据不足 (需要 ${strategyParams.emaLong + 10} 条)`);
+          } catch (err: any) {
+            addLog(`  ❌ ${symbol} 信号检测失败: ${err.message}`);
+            console.error(`信号检测失败 (${symbol}):`, err);
           }
         } catch (err: any) {
-          addLog(`  ❌ ${symbol} 扫描失败: ${err.message}`);
-          console.error(`扫描${symbol}失败:`, err);
+          addLog(`  ❌ ${symbol} K线数据获取失败: ${err.message}`);
+          console.error(`K线数据获取失败 (${symbol}):`, err);
         }
 
         // 避免请求过快
