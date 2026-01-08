@@ -2312,6 +2312,10 @@ export default function BinanceAutoTrader() {
                   const highestPrice = pos.highestPrice || pos.entryPrice;
                   const lowestPrice = pos.lowestPrice || pos.entryPrice;
 
+                  // 获取合约精度信息
+                  const symbolInfo = symbols.find(s => s.symbol === pos.symbol);
+                  const pricePrecision = symbolInfo?.pricePrecision ?? 2;
+
                   return (
                     <tr key={index} className="border-t border-gray-700">
                       <td className="px-3 py-2 font-bold">{pos.symbol}</td>
@@ -2323,17 +2327,17 @@ export default function BinanceAutoTrader() {
                         </span>
                       </td>
                       <td className="px-3 py-2">{Math.abs(pos.positionAmt).toFixed(4)}</td>
-                      <td className="px-3 py-2">{pos.entryPrice.toFixed(2)}</td>
-                      <td className="px-3 py-2">{pos.markPrice.toFixed(2)}</td>
+                      <td className="px-3 py-2">{pos.entryPrice.toFixed(pricePrecision)}</td>
+                      <td className="px-3 py-2">{pos.markPrice.toFixed(pricePrecision)}</td>
 
                       {tradingConfig.usePartialTakeProfit ? (
                         <>
                           <td className={`px-3 py-2 ${pos.markPrice >= r1Price ? "text-green-500 font-bold" : "text-yellow-400"}`}>
-                            {r1Price.toFixed(2)}
+                            {r1Price.toFixed(pricePrecision)}
                             {pos.markPrice >= r1Price && " ✓"}
                           </td>
                           <td className={`px-3 py-2 ${pos.markPrice >= r2Price ? "text-green-500 font-bold" : "text-yellow-400"}`}>
-                            {r2Price.toFixed(2)}
+                            {r2Price.toFixed(pricePrecision)}
                             {pos.markPrice >= r2Price && " ✓"}
                           </td>
                           <td className="px-3 py-2 text-xs">
@@ -2349,14 +2353,14 @@ export default function BinanceAutoTrader() {
                         </>
                       ) : (
                         <>
-                          <td className="px-3 py-2 text-red-400">{stopLossPrice.toFixed(2)}</td>
-                          <td className="px-3 py-2 text-green-400">{takeProfitPrice.toFixed(2)}</td>
+                          <td className="px-3 py-2 text-red-400">{stopLossPrice.toFixed(pricePrecision)}</td>
+                          <td className="px-3 py-2 text-green-400">{takeProfitPrice.toFixed(pricePrecision)}</td>
                         </>
                       )}
 
                       {tradingConfig.useTrailingStop && (
                         <td className="px-3 py-2 text-blue-400 text-xs">
-                          {pos.trailingStopPrice ? pos.trailingStopPrice.toFixed(2) : "-"}
+                          {pos.trailingStopPrice ? pos.trailingStopPrice.toFixed(pricePrecision) : "-"}
                           {pos.stopLossBreakeven && " (保本)"}
                         </td>
                       )}
@@ -3389,39 +3393,45 @@ export default function BinanceAutoTrader() {
                 </tr>
               </thead>
               <tbody>
-                {tradeRecords.map((trade) => (
-                  <tr key={trade.id} className="border-t border-gray-700">
-                    <td className="px-3 py-2">{formatTime(trade.time)}</td>
-                    <td className="px-3 py-2 font-bold">{trade.symbol}</td>
-                    <td className="px-3 py-2">
-                      <span
-                        className={`px-2 py-1 rounded text-xs ${
-                          trade.side === "BUY" ? "bg-green-600" : "bg-red-600"
-                        }`}
-                      >
-                        {trade.side === "BUY" ? "买入" : "卖出"}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2">{trade.type}</td>
-                    <td className="px-3 py-2">{trade.quantity.toFixed(4)}</td>
-                    <td className="px-3 py-2">
-                      {trade.price > 0 ? trade.price.toFixed(2) : "-"}
-                    </td>
-                    <td className="px-3 py-2">
-                      <span
-                        className={
-                          trade.status === "FILLED"
-                            ? "text-green-500"
-                            : trade.status === "FAILED"
-                            ? "text-red-500"
-                            : "text-yellow-500"
-                        }
-                      >
-                        {trade.status === "FILLED" ? "已成交" : trade.status === "FAILED" ? "失败" : "待成交"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {tradeRecords.map((trade) => {
+                  // 获取合约精度信息
+                  const symbolInfo = symbols.find(s => s.symbol === trade.symbol);
+                  const pricePrecision = symbolInfo?.pricePrecision ?? 2;
+
+                  return (
+                    <tr key={trade.id} className="border-t border-gray-700">
+                      <td className="px-3 py-2">{formatTime(trade.time)}</td>
+                      <td className="px-3 py-2 font-bold">{trade.symbol}</td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={`px-2 py-1 rounded text-xs ${
+                            trade.side === "BUY" ? "bg-green-600" : "bg-red-600"
+                          }`}
+                        >
+                          {trade.side === "BUY" ? "买入" : "卖出"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">{trade.type}</td>
+                      <td className="px-3 py-2">{trade.quantity.toFixed(4)}</td>
+                      <td className="px-3 py-2">
+                        {trade.price > 0 ? trade.price.toFixed(pricePrecision) : "-"}
+                      </td>
+                      <td className="px-3 py-2">
+                        <span
+                          className={
+                            trade.status === "FILLED"
+                              ? "text-green-500"
+                              : trade.status === "FAILED"
+                              ? "text-red-500"
+                              : "text-yellow-500"
+                          }
+                        >
+                          {trade.status === "FILLED" ? "已成交" : trade.status === "FAILED" ? "失败" : "待成交"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -3453,6 +3463,10 @@ export default function BinanceAutoTrader() {
               const position = positions.find((p) => p.symbol === symbol);
               const hasPosition = position !== undefined;
 
+              // 获取合约精度信息
+              const symbolInfo = symbols.find(s => s.symbol === symbol);
+              const pricePrecision = symbolInfo?.pricePrecision ?? 2;
+
               return (
                 <div
                   key={symbol}
@@ -3467,7 +3481,7 @@ export default function BinanceAutoTrader() {
                     )}
                   </div>
                   <p className={`text-lg mt-2 ${priceChange >= 0 ? "text-green-500" : "text-red-500"}`}>
-                    {currentPrice > 0 ? currentPrice.toFixed(2) : "-"}
+                    {currentPrice > 0 ? currentPrice.toFixed(pricePrecision) : "-"}
                   </p>
                   <p className={`text-sm ${priceChange >= 0 ? "text-green-500" : "text-red-500"}`}>
                     {priceChange >= 0 ? "+" : ""}
