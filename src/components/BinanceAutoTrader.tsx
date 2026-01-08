@@ -1125,12 +1125,16 @@ export default function BinanceAutoTrader() {
   ): "long" | "short" | "none" => {
     if (data15m.length < strategyParams.emaLong) return "none";
 
-    const index = data15m.length - 1;
-    const emaS = emaShort[index];
-    const emaL = emaLong[index];
-    const close = data15m[index].close;
-    const volume = data15m[index].volume;
-    const volMA = volumeMA[index];
+    // EMA数组的索引：EMA数组长度 = data.length - period + 1
+    // 最后一条数据的EMA索引是 ema.length - 1，对应 data 的最后一条
+    const dataIndex = data15m.length - 1;
+    const emaIndex = emaShort.length - 1;
+
+    const emaS = emaShort[emaIndex];
+    const emaL = emaLong[emaIndex];
+    const close = data15m[dataIndex].close;
+    const volume = data15m[dataIndex].volume;
+    const volMA = volumeMA[emaIndex];
 
     // 安全检查：确保EMA值存在
     if (emaS === undefined || emaL === undefined || emaL === 0) {
@@ -1180,14 +1184,23 @@ export default function BinanceAutoTrader() {
       details: `需要${strategyParams.emaLong + 10}条K线，实际只有${data5m.length}条`
     };
 
-    const index = data5m.length - 1;
-    const current = data5m[index];
-    const prev = data5m[index - 1];
-    const prev2 = data5m[index - 2];
-    const emaS = emaShort5m[index];
-    const emaL = emaLong5m[index];
-    const rsi = rsi5m[index];
-    const rsiPrev = rsi5m[index - 1];
+    // EMA和RSI数组的索引：EMA数组长度 = data.length - period + 1
+    // 最后一条数据的EMA索引是 ema.length - 1，对应 data 的最后一条
+    const dataIndex = data5m.length - 1;
+    const emaIndex = emaShort5m.length - 1;
+
+    const current = data5m[dataIndex];
+    const prev = data5m[dataIndex - 1];
+    const prev2 = data5m[dataIndex - 2];
+
+    // 对于EMA和RSI，需要使用对应的索引
+    // ema[emaIndex] 对应 data[dataIndex]
+    // ema[emaIndex - 1] 对应 data[dataIndex - 1]
+    const emaS = emaShort5m[emaIndex];
+    const emaL = emaLong5m[emaIndex];
+    const emaS_Prev = emaShort5m[emaIndex - 1];
+    const rsi = rsi5m[emaIndex];
+    const rsiPrev = rsi5m[emaIndex - 1];
 
     // 安全检查：确保指标值存在
     if (emaS === undefined || emaL === undefined || rsi === undefined || rsiPrev === undefined) {
@@ -1357,10 +1370,13 @@ export default function BinanceAutoTrader() {
     );
 
     if (trendDirection === "none") {
-      const index = data15m.length - 1;
-      const emaS = emaShort15m[index];
-      const emaL = emaLong15m[index];
-      const close = data15m[index].close;
+      // EMA数组的长度是 data.length - period + 1，最后一条数据的索引是 ema.length - 1
+      const emaIndex = emaShort15m.length - 1;
+      const dataIndex = data15m.length - 1;
+
+      const emaS = emaShort15m[emaIndex];
+      const emaL = emaLong15m[emaIndex];
+      const close = data15m[dataIndex].close;
 
       // 安全检查：确保EMA值存在
       if (emaS === undefined || emaL === undefined || emaL === 0) {
