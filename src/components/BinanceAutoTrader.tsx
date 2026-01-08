@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import CryptoBacktestTool, { StrategyParams, DEFAULT_PARAMS } from "./CryptoBacktestTool";
 
 // 类型定义
 interface KLineData {
@@ -12,6 +11,32 @@ interface KLineData {
   close: number;
   volume: number;
 }
+
+interface StrategyParams {
+  emaShort: number;
+  emaLong: number;
+  rsiPeriod: number;
+  volumePeriod: number;
+  stopLossPercent: number;
+  riskReward1: number;
+  riskReward2: number;
+  leverage: number;
+  riskPercent: number;
+  minTrendDistance: number;
+}
+
+const DEFAULT_PARAMS: StrategyParams = {
+  emaShort: 20,
+  emaLong: 60,
+  rsiPeriod: 14,
+  volumePeriod: 20,
+  stopLossPercent: 0.4,
+  riskReward1: 1.5,
+  riskReward2: 2.5,
+  leverage: 3,
+  riskPercent: 2,
+  minTrendDistance: 0.15,
+};
 
 interface FuturesSymbol {
   symbol: string;
