@@ -157,6 +157,8 @@ interface TradingConfig {
   trailingStopMoveToBreakeven: boolean; // 达到1R后移动到保本价
   // 扫描配置
   scanIntervalMinutes: number;   // 自动扫描间隔时间（分钟）
+  // 止盈止损订单配置
+  useStopTakeProfitOrders: boolean; // 开仓时同时挂止盈止损单（不使用分段止盈和移动止损）
 }
 
 const DEFAULT_TRADING_CONFIG: TradingConfig = {
@@ -181,6 +183,8 @@ const DEFAULT_TRADING_CONFIG: TradingConfig = {
   trailingStopMoveToBreakeven: true, // 达到1R后移动到保本价
   // 扫描配置
   scanIntervalMinutes: 5,  // 默认每5分钟扫描一次
+  // 止盈止损订单配置（默认开启，优先于分段止盈）
+  useStopTakeProfitOrders: true, // 开仓时同时挂止盈止损单
 };
 
 export default function BinanceAutoTrader() {
@@ -1671,6 +1675,92 @@ export default function BinanceAutoTrader() {
       setDailyTradesCount((prev) => prev + 1);
       addSystemLog(`交易成功: ${signal.symbol} ${side} ${quantity.toFixed(4)} @ ${signal.entryPrice}`, 'success');
 
+      // 如果启用了止盈止损订单，立即挂止盈止损单
+      if (tradingConfig.useStopTakeProfitOrders) {
+        addSystemLog(`正在设置止盈止损单...`, 'info');
+
+        try {
+          // 计算止损止盈价格
+          const stopLossPrice = signal.direction === "long"
+            ? signal.entryPrice * (1 - tradingConfig.stopLossPercent / 100)
+            : signal.entryPrice * (1 + tradingConfig.stopLossPercent / 100);
+
+          const takeProfitPrice = signal.direction === "long"
+            ? signal.entryPrice * (1 + tradingConfig.takeProfitPercent / 100)
+            : signal.entryPrice * (1 - tradingConfig.takeProfitPercent / 100);
+
+          // 格式化价格
+          const symbolInfo = symbols.find(s => s.symbol === signal.symbol);
+          const pricePrecision = symbolInfo?.pricePrecision ?? 8;
+
+          const formattedStopLossPrice = parseFloat(stopLossPrice.toFixed(pricePrecision));
+          const formattedTakeProfitPrice = parseFloat(takeProfitPrice.toFixed(pricePrecision));
+
+          // 止损订单（STOP_LOSS_LIMIT，使用限价单避免滑点过大）
+          const stopLossSide = signal.direction === "long" ? "SELL" : "BUY";
+          const stopLossOrder = {
+            apiKey,
+            apiSecret,
+            symbol: signal.symbol,
+            side: stopLossSide,
+            type: "STOP_LOSS_LIMIT",
+            quantity: formattedQuantity,
+            price: formattedStopLossPrice, // 止损执行价格（限价单）
+            triggerPrice: formattedStopLossPrice, // 触发价格
+            positionSide,
+          };
+
+          // 止盈订单（TAKE_PROFIT_MARKET，市价单快速成交）
+          const takeProfitSide = signal.direction === "long" ? "SELL" : "BUY";
+          const takeProfitOrder = {
+            apiKey,
+            apiSecret,
+            symbol: signal.symbol,
+            side: takeProfitSide,
+            type: "TAKE_PROFIT_MARKET",
+            quantity: formattedQuantity,
+            triggerPrice: formattedTakeProfitPrice, // 触发价格
+            positionSide,
+          };
+
+          // 并行下达止盈止损单
+          const [stopLossResponse, takeProfitResponse] = await Promise.all([
+            fetch("/api/binance/order", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(stopLossOrder),
+            }),
+            fetch("/api/binance/order", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(takeProfitOrder),
+            }),
+          ]);
+
+          // 处理止损单结果
+          if (stopLossResponse.ok) {
+            const stopLossResult = await stopLossResponse.json();
+            addSystemLog(`止损单已挂: ${signal.symbol} 价格=${formattedStopLossPrice} 订单ID=${stopLossResult.orderId}`, 'success');
+          } else {
+            const stopLossError = await stopLossResponse.json();
+            addSystemLog(`止损单挂单失败: ${stopLossError.error}`, 'error');
+          }
+
+          // 处理止盈单结果
+          if (takeProfitResponse.ok) {
+            const takeProfitResult = await takeProfitResponse.json();
+            addSystemLog(`止盈单已挂: ${signal.symbol} 价格=${formattedTakeProfitPrice} 订单ID=${takeProfitResult.orderId}`, 'success');
+          } else {
+            const takeProfitError = await takeProfitResponse.json();
+            addSystemLog(`止盈单挂单失败: ${takeProfitError.error}`, 'error');
+          }
+
+        } catch (err: any) {
+          addSystemLog(`止盈止损单挂单失败: ${err.message}`, 'error');
+          // 即使止盈止损单失败，也不影响主订单的完成
+        }
+      }
+
       // 立即更新持仓信息，确保下次扫描能正确检查持仓数量限制
       await fetchAccountInfo();
     } catch (err: any) {
@@ -2017,6 +2107,7 @@ export default function BinanceAutoTrader() {
                       const newConfig = { ...tradingConfig, usePartialTakeProfit: e.target.checked };
                       if (e.target.checked) {
                         newConfig.autoTakeProfit = false; // 开启分段止盈时关闭简单止盈
+                        newConfig.useStopTakeProfitOrders = false; // 开启分段止盈时关闭止盈止损订单
                       }
                       setTradingConfig(newConfig);
                     }}
@@ -2032,16 +2123,43 @@ export default function BinanceAutoTrader() {
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={tradingConfig.useTrailingStop}
-                    onChange={(e) =>
-                      setTradingConfig({ ...tradingConfig, useTrailingStop: e.target.checked })
-                    }
+                    checked={tradingConfig.useStopTakeProfitOrders}
+                    onChange={(e) => {
+                      const newConfig = { ...tradingConfig, useStopTakeProfitOrders: e.target.checked };
+                      if (e.target.checked) {
+                        newConfig.usePartialTakeProfit = false; // 开启止盈止损订单时关闭分段止盈
+                        newConfig.autoTakeProfit = false; // 开启止盈止损订单时关闭简单止盈
+                        newConfig.useTrailingStop = false; // 开启止盈止损订单时关闭移动止损
+                      }
+                      setTradingConfig(newConfig);
+                    }}
                     className="w-4 h-4"
                   />
-                  <span className="text-sm text-gray-300">移动止损</span>
+                  <span className="text-sm text-gray-300">止盈止损订单</span>
                 </label>
                 <div className="text-xs text-gray-500 mt-1">
-                  达到1R后移动止损
+                  开仓时同时挂止盈止损单，无需手动监控
+                </div>
+              </div>
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={tradingConfig.useTrailingStop}
+                    onChange={(e) => {
+                      const newConfig = { ...tradingConfig, useTrailingStop: e.target.checked };
+                      if (e.target.checked) {
+                        newConfig.useStopTakeProfitOrders = false; // 开启移动止损时关闭止盈止损订单
+                      }
+                      setTradingConfig(newConfig);
+                    }}
+                    disabled={tradingConfig.useStopTakeProfitOrders}
+                    className="w-4 h-4"
+                  />
+                  <span className={`text-sm ${tradingConfig.useStopTakeProfitOrders ? "text-gray-500" : "text-gray-300"}`}>移动止损</span>
+                </label>
+                <div className="text-xs text-gray-500 mt-1">
+                  {tradingConfig.useStopTakeProfitOrders ? "已使用止盈止损订单" : "达到1R后移动止损"}
                 </div>
               </div>
               <div>
@@ -2656,6 +2774,7 @@ export default function BinanceAutoTrader() {
                       const newConfig = { ...tradingConfig, usePartialTakeProfit: e.target.checked };
                       if (e.target.checked) {
                         newConfig.autoTakeProfit = false; // 开启分段止盈时关闭简单止盈
+                        newConfig.useStopTakeProfitOrders = false; // 开启分段止盈时关闭止盈止损订单
                       }
                       setTradingConfig(newConfig);
                     }}
@@ -2671,16 +2790,43 @@ export default function BinanceAutoTrader() {
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={tradingConfig.useTrailingStop}
-                    onChange={(e) =>
-                      setTradingConfig({ ...tradingConfig, useTrailingStop: e.target.checked })
-                    }
+                    checked={tradingConfig.useStopTakeProfitOrders}
+                    onChange={(e) => {
+                      const newConfig = { ...tradingConfig, useStopTakeProfitOrders: e.target.checked };
+                      if (e.target.checked) {
+                        newConfig.usePartialTakeProfit = false; // 开启止盈止损订单时关闭分段止盈
+                        newConfig.autoTakeProfit = false; // 开启止盈止损订单时关闭简单止盈
+                        newConfig.useTrailingStop = false; // 开启止盈止损订单时关闭移动止损
+                      }
+                      setTradingConfig(newConfig);
+                    }}
                     className="w-4 h-4"
                   />
-                  <span className="text-sm text-gray-300">移动止损</span>
+                  <span className="text-sm text-gray-300">止盈止损订单</span>
                 </label>
                 <div className="text-xs text-gray-500 mt-1">
-                  达到1R后移动止损
+                  开仓时同时挂止盈止损单，无需手动监控
+                </div>
+              </div>
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={tradingConfig.useTrailingStop}
+                    onChange={(e) => {
+                      const newConfig = { ...tradingConfig, useTrailingStop: e.target.checked };
+                      if (e.target.checked) {
+                        newConfig.useStopTakeProfitOrders = false; // 开启移动止损时关闭止盈止损订单
+                      }
+                      setTradingConfig(newConfig);
+                    }}
+                    disabled={tradingConfig.useStopTakeProfitOrders}
+                    className="w-4 h-4"
+                  />
+                  <span className={`text-sm ${tradingConfig.useStopTakeProfitOrders ? "text-gray-500" : "text-gray-300"}`}>移动止损</span>
+                </label>
+                <div className="text-xs text-gray-500 mt-1">
+                  {tradingConfig.useStopTakeProfitOrders ? "已使用止盈止损订单" : "达到1R后移动止损"}
                 </div>
               </div>
               <div>

@@ -23,6 +23,7 @@ export async function POST(request: NextRequest) {
       positionSide, // 新增持仓方向参数
       stopLoss,
       takeProfit,
+      triggerPrice, // 统一的触发价格（用于止损和止盈）
     } = await request.json();
 
     // 清理API密钥和Secret
@@ -62,24 +63,44 @@ export async function POST(request: NextRequest) {
     }
 
     // LIMIT订单需要价格
-    if (price && type === "LIMIT") {
+    if (price && (type === "LIMIT" || type === "STOP_LOSS_LIMIT" || type === "TAKE_PROFIT_LIMIT")) {
       params.price = price.toString();
     }
 
-    // 只有STOP类型订单才需要stopPrice
-    if ((type === "STOP" || type === "STOP_MARKET" || type === "STOP_LIMIT") && stopLoss) {
-      params.stopPrice = stopLoss.toString();
+    // 统一的触发价格参数（用于止损和止盈）
+    if (triggerPrice) {
+      // 以下订单类型需要触发价格
+      const stopOrderTypes = ["STOP", "STOP_MARKET", "STOP_LOSS", "STOP_LOSS_LIMIT"];
+      const takeProfitOrderTypes = ["TAKE_PROFIT", "TAKE_PROFIT_MARKET", "TAKE_PROFIT_LIMIT"];
+
+      if (stopOrderTypes.includes(type) || takeProfitOrderTypes.includes(type)) {
+        params.stopPrice = triggerPrice.toString();
+      }
     }
 
-    // STOP_LIMIT类型需要stopLimitPrice
-    if (type === "STOP_LIMIT" && stopLoss) {
-      params.stopLimitPrice = stopLoss.toString();
-      params.stopLimitTimeInForce = "GTC";
+    // 兼容旧的stopLoss和takeProfit参数（用于向后兼容）
+    if (!triggerPrice && stopLoss) {
+      const stopOrderTypes = ["STOP", "STOP_MARKET", "STOP_LOSS", "STOP_LOSS_LIMIT"];
+      if (stopOrderTypes.includes(type)) {
+        params.stopPrice = stopLoss.toString();
+      }
     }
 
-    // TAKE_PROFIT类型订单需要takeProfitPrice
-    if ((type === "TAKE_PROFIT" || type === "TAKE_PROFIT_MARKET") && takeProfit) {
-      params.takeProfitPrice = takeProfit.toString();
+    if (!triggerPrice && takeProfit) {
+      const takeProfitOrderTypes = ["TAKE_PROFIT", "TAKE_PROFIT_MARKET", "TAKE_PROFIT_LIMIT"];
+      if (takeProfitOrderTypes.includes(type)) {
+        params.stopPrice = takeProfit.toString();
+      }
+    }
+
+    // STOP_LOSS_LIMIT类型需要timeInForce
+    if (type === "STOP_LOSS_LIMIT") {
+      params.timeInForce = "GTC";
+    }
+
+    // TAKE_PROFIT_LIMIT类型需要timeInForce
+    if (type === "TAKE_PROFIT_LIMIT") {
+      params.timeInForce = "GTC";
     }
 
     // 按字母顺序排序参数
