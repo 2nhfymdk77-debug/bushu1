@@ -208,6 +208,8 @@ export default function BinanceAutoTrader() {
   const [scanLog, setScanLog] = useState<string[]>([]);
   const [systemLog, setSystemLog] = useState<string[]>([]); // 系统日志（交易、WebSocket、系统事件）
   const [customIntervalMinutes, setCustomIntervalMinutes] = useState(5); // 自定义间隔时间（分钟）
+  const [contractPool, setContractPool] = useState<string[]>([]); // 合约池（高成交量合约列表）
+  const [currentBatchIndex, setCurrentBatchIndex] = useState(0); // 当前扫描批次索引
 
   const wsRef = useRef<WebSocket | null>(null);
   const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -283,15 +285,33 @@ export default function BinanceAutoTrader() {
       const tickers = await tickerResponse.json();
       addLog(`✅ 获取到 ${tickers.length} 个合约`);
 
-      // 按成交量排序,取前10个USDT合约（减少扫描数量，提高响应速度）
-      const usdtTickers = tickers
+      // 按成交量排序,取前50个USDT合约作为合约池（支持轮询切换）
+      const newContractPool = tickers
         .filter((t: any) => t.symbol.endsWith("USDT") && parseFloat(t.quoteVolume) > 10000000)
         .sort((a: any, b: any) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-        .slice(0, 10)
+        .slice(0, 50)
         .map((t: any) => t.symbol);
 
-      addLog(`📊 筛选出 ${usdtTickers.length} 个高成交量合约: ${usdtTickers.join(', ')}`);
-      setScanProgress(`正在扫描 ${usdtTickers.length} 个热门合约...`);
+      // 如果合约池更新了，重置批次索引
+      if (JSON.stringify(newContractPool) !== JSON.stringify(contractPool)) {
+        setContractPool(newContractPool);
+        setCurrentBatchIndex(0);
+        addLog(`📊 更新合约池: ${newContractPool.length} 个高成交量合约`);
+      }
+
+      // 轮询机制：每次扫描选择不同的批次（每批10个合约）
+      const batchSize = 10;
+      const totalBatches = Math.ceil(newContractPool.length / batchSize);
+      const startIndex = (currentBatchIndex * batchSize) % newContractPool.length;
+      const endIndex = Math.min(startIndex + batchSize, newContractPool.length);
+      const currentBatch = newContractPool.slice(startIndex, endIndex);
+
+      addLog(`📊 批次 ${currentBatchIndex + 1}/${totalBatches}: ${currentBatch.length} 个合约 ${currentBatch.join(', ')}`);
+
+      // 更新批次索引（下次扫描切换到下一批）
+      setCurrentBatchIndex((prev) => (prev + 1) % totalBatches);
+
+      setScanProgress(`正在扫描批次 ${currentBatchIndex + 1}/${totalBatches}...`);
 
       // 对每个合约进行信号检测
       let signalsFound = 0;
@@ -299,12 +319,12 @@ export default function BinanceAutoTrader() {
       let checkedCount = 0;
       let skippedCount = 0;
 
-      for (let i = 0; i < usdtTickers.length; i++) {
-        const symbol = usdtTickers[i];
+      for (let i = 0; i < currentBatch.length; i++) {
+        const symbol = currentBatch[i];
         checkedCount++;
-        const progress = Math.round((i + 1) / usdtTickers.length * 100);
-        setScanProgress(`扫描中 ${i + 1}/${usdtTickers.length}: ${symbol} (${progress}%)`);
-        addLog(`🔍 [${i + 1}/${usdtTickers.length}] 扫描 ${symbol}...`);
+        const progress = Math.round((i + 1) / currentBatch.length * 100);
+        setScanProgress(`批次 ${currentBatchIndex + 1}/${totalBatches} 扫描中 ${i + 1}/${currentBatch.length}: ${symbol} (${progress}%)`);
+        addLog(`🔍 [${i + 1}/${currentBatch.length}] 扫描 ${symbol}...`);
 
         // 检查是否达到持仓数量限制
         if (positions.length >= tradingConfig.maxOpenPositions) {
@@ -2830,8 +2850,8 @@ export default function BinanceAutoTrader() {
                       </div>
 
                       <ul className="list-disc list-inside text-xs space-y-1">
-                        <li><strong>扫描范围：</strong>24h成交量最高的前10个USDT合约</li>
-                        <li><strong>执行频率：</strong>每{tradingConfig.scanIntervalMinutes < 60 ? `${tradingConfig.scanIntervalMinutes}分钟` : `${tradingConfig.scanIntervalMinutes / 60}小时`}自动扫描一次，也可手动触发</li>
+                        <li><strong>扫描范围：</strong>24h成交量最高的前50个USDT合约，轮询每批扫描10个</li>
+                        <li><strong>执行频率：</strong>每{tradingConfig.scanIntervalMinutes < 60 ? `${tradingConfig.scanIntervalMinutes}分钟` : `${tradingConfig.scanIntervalMinutes / 60}小时`}自动扫描一次，每次切换不同合约批次</li>
                         <li><strong>交易限制：</strong>
                           <ul className="list-decimal list-inside ml-4 mt-1 space-y-1">
                             <li>持仓数量：当前 {positions.length}/{tradingConfig.maxOpenPositions}</li>
@@ -2840,9 +2860,10 @@ export default function BinanceAutoTrader() {
                         </li>
                         <li><strong>筛选条件：</strong>15分钟趋势 + 5分钟回调进场（需满足2/4条件）</li>
                         <li><strong>交易执行：</strong>发现符合条件的信号后自动开仓</li>
+                        <li><strong>轮询机制：</strong>每次扫描切换不同合约批次，覆盖更多交易机会</li>
                       </ul>
                       <div className="mt-3 p-2 bg-green-800/30 rounded text-xs text-green-200">
-                        ✅ 此模式下无需手动选择合约，系统会自动发现交易机会
+                        ✅ 此模式下无需手动选择合约，系统会自动轮询发现交易机会
                       </div>
                     </div>
                   )}
