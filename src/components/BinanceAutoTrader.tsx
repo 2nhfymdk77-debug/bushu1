@@ -1092,6 +1092,20 @@ export default function BinanceAutoTrader() {
     };
   }, [isTrading, connected]);
 
+  // 持仓监控定时任务（自动检查持仓并执行止盈止损）
+  useEffect(() => {
+    if (isTrading && connected && autoTrading && positions.length > 0) {
+      // 每2秒检查一次持仓状态
+      const checkInterval = setInterval(() => {
+        checkPositionsAndAutoClose();
+      }, 2000);
+
+      return () => {
+        clearInterval(checkInterval);
+      };
+    }
+  }, [isTrading, connected, autoTrading, positions]);
+
   // 计算EMA
   const calculateEMA = (data: KLineData[], period: number): number[] => {
     if (data.length < period) return [];
@@ -3401,7 +3415,19 @@ export default function BinanceAutoTrader() {
       {/* 实时价格 */}
       {isTrading && selectedSymbols.length > 0 && (
         <div className="bg-gray-800 rounded-lg p-6">
-          <h2 className="text-xl font-bold mb-4">实时价格</h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold">实时价格</h2>
+            {/* 持仓监控状态 */}
+            {isTrading && connected && autoTrading && positions.length > 0 && (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="animate-pulse">📊</span>
+                <span className="text-green-400">持仓监控中</span>
+                <span className="text-gray-400 text-xs">
+                  ({positions.length}个持仓，每2秒检查)
+                </span>
+              </div>
+            )}
+          </div>
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
             {selectedSymbols.map((symbol) => {
               const data = klineData.get(symbol);
