@@ -1968,7 +1968,7 @@ export default function BinanceAutoTrader() {
           const formattedStopLossPrice = parseFloat(stopLossPrice.toFixed(pricePrecision));
           const formattedTakeProfitPrice = parseFloat(takeProfitPrice.toFixed(pricePrecision));
 
-          // 止损订单（STOP_MARKET，使用市价单确保快速成交）
+          // 止损订单（使用专门的算法订单API）
           const stopLossSide = signal.direction === "long" ? "SELL" : "BUY";
           const stopLossOrder = {
             apiKey,
@@ -1977,11 +1977,12 @@ export default function BinanceAutoTrader() {
             side: stopLossSide,
             type: "STOP_MARKET",
             quantity: formattedQuantity,
-            triggerPrice: formattedStopLossPrice, // 触发价格
+            stopPrice: formattedStopLossPrice, // 触发价格
             positionSide,
+            reduceOnly: true, // 只减仓
           };
 
-          // 止盈订单（TAKE_PROFIT_MARKET，市价单快速成交）
+          // 止盈订单（使用专门的算法订单API）
           const takeProfitSide = signal.direction === "long" ? "SELL" : "BUY";
           const takeProfitOrder = {
             apiKey,
@@ -1990,18 +1991,19 @@ export default function BinanceAutoTrader() {
             side: takeProfitSide,
             type: "TAKE_PROFIT_MARKET",
             quantity: formattedQuantity,
-            triggerPrice: formattedTakeProfitPrice, // 触发价格
+            stopPrice: formattedTakeProfitPrice, // 触发价格
             positionSide,
+            reduceOnly: true, // 只减仓
           };
 
-          // 并行下达止盈止损单
+          // 并行下达止盈止损单（使用算法订单API端点）
           const [stopLossResponse, takeProfitResponse] = await Promise.all([
-            fetch("/api/binance/order", {
+            fetch("/api/binance/algoOrder", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(stopLossOrder),
             }),
-            fetch("/api/binance/order", {
+            fetch("/api/binance/algoOrder", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(takeProfitOrder),
@@ -2011,19 +2013,19 @@ export default function BinanceAutoTrader() {
           // 处理止损单结果
           if (stopLossResponse.ok) {
             const stopLossResult = await stopLossResponse.json();
-            addSystemLog(`止损单已挂: ${signal.symbol} 价格=${formattedStopLossPrice} 订单ID=${stopLossResult.orderId}`, 'success');
+            addSystemLog(`止损单已挂: ${signal.symbol} 触发价=${formattedStopLossPrice} 订单ID=${stopLossResult.orderId}`, 'success');
           } else {
             const stopLossError = await stopLossResponse.json();
-            addSystemLog(`止损单挂单失败: ${stopLossError.error}`, 'error');
+            addSystemLog(`止损单挂单失败: ${stopLossError.error} (code: ${stopLossError.code})`, 'error');
           }
 
           // 处理止盈单结果
           if (takeProfitResponse.ok) {
             const takeProfitResult = await takeProfitResponse.json();
-            addSystemLog(`止盈单已挂: ${signal.symbol} 价格=${formattedTakeProfitPrice} 订单ID=${takeProfitResult.orderId}`, 'success');
+            addSystemLog(`止盈单已挂: ${signal.symbol} 触发价=${formattedTakeProfitPrice} 订单ID=${takeProfitResult.orderId}`, 'success');
           } else {
             const takeProfitError = await takeProfitResponse.json();
-            addSystemLog(`止盈单挂单失败: ${takeProfitError.error}`, 'error');
+            addSystemLog(`止盈单挂单失败: ${takeProfitError.error} (code: ${takeProfitError.code})`, 'error');
           }
 
         } catch (err: any) {
