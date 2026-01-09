@@ -218,8 +218,6 @@ export default function BinanceAutoTrader() {
   const [positions, setPositions] = useState<Position[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [symbols, setSymbols] = useState<FuturesSymbol[]>([]);
-  const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
-  const [isTrading, setIsTrading] = useState(false);
   const [autoTrading, setAutoTrading] = useState(false);
   const [autoScanAll, setAutoScanAll] = useState(false);
   const [scanProgress, setScanProgress] = useState("");
@@ -1146,15 +1144,6 @@ export default function BinanceAutoTrader() {
       setConnected(true);
       saveConfig();
       addSystemLog("成功连接币安主网", 'success');
-
-      // 默认选择主流币
-      const popularSymbols = usdtSymbols
-        .filter((s: FuturesSymbol) =>
-          ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"].includes(s.symbol)
-        )
-        .map((s: FuturesSymbol) => s.symbol);
-      setSelectedSymbols(popularSymbols);
-      addSystemLog(`默认选择: ${popularSymbols.join(', ')}`, 'info');
     } catch (err: any) {
       console.error('[connectBinance] Connection failed:', err);
       setError(err.message || "连接失败");
@@ -1347,7 +1336,7 @@ export default function BinanceAutoTrader() {
 
   // 开始/停止定时刷新
   useEffect(() => {
-    if (isTrading && connected) {
+    if (autoTrading && connected) {
       fetchAccountInfo();
       refreshIntervalRef.current = setInterval(fetchAccountInfo, 5000); // 每5秒刷新
     } else {
@@ -1362,7 +1351,7 @@ export default function BinanceAutoTrader() {
         clearInterval(refreshIntervalRef.current);
       }
     };
-  }, [isTrading, connected]);
+  }, [autoTrading, connected]);
 
   // 持仓监控定时任务（自动检查持仓并执行止盈止损）
   useEffect(() => {
@@ -2108,134 +2097,11 @@ export default function BinanceAutoTrader() {
     }
   };
 
-  // 连接WebSocket
-  const connectWebSocket = () => {
-    if (wsRef.current) {
-      wsRef.current.close();
-    }
 
-    const streams = selectedSymbols.map(s => `${s.toLowerCase()}@kline_15m`).join("/");
-    const wsUrl = `wss://fstream.binance.com/ws/${streams}`;
-    addSystemLog(`连接 WebSocket: ${selectedSymbols.length} 个合约`, 'info');
-
-    wsRef.current = new WebSocket(wsUrl);
-
-    wsRef.current.onopen = () => {
-      addSystemLog("WebSocket 已连接，开始接收实时数据", 'success');
-    };
-
-    wsRef.current.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      const symbol = data.s;
-
-      const kline = {
-        timestamp: data.k.t,
-        open: parseFloat(data.k.o),
-        high: parseFloat(data.k.h),
-        low: parseFloat(data.k.l),
-        close: parseFloat(data.k.c),
-        volume: parseFloat(data.k.v),
-      };
-
-      setKlineData((prev) => {
-        const newMap = new Map(prev);
-        const existing = newMap.get(symbol) || [];
-        const updated = [...existing, kline].slice(-200);
-        newMap.set(symbol, updated);
-
-        // 使用更新后的数据检查信号
-        if (updated.length >= strategyParams.emaLong + 10) {
-          // WebSocket实时监控只检查15分钟趋势方向（完整的信号扫描由scanAllSymbols完成）
-          const trendSignal = checkTrendDirection(symbol, updated);
-          if (trendSignal) {
-            addSystemLog(`${symbol} 发现趋势信号: ${trendSignal.direction}`, 'info');
-
-            // WebSocket只用于显示趋势信号，不执行交易
-            // 完整的信号（15分钟趋势 + 5分钟回调进场）由scanAllSymbols检测并执行
-            setSignals((prev) => {
-              const lastSignal = prev[0];
-              if (
-                lastSignal &&
-                lastSignal.symbol === trendSignal.symbol &&
-                lastSignal.direction === trendSignal.direction &&
-                Date.now() - lastSignal.time < 300000
-              ) {
-                return prev;
-              }
-              return [{
-                ...trendSignal,
-                confidence: 0.5, // 趋势信号置信度较低
-                reason: `${trendSignal.reason}（仅趋势，等待5分钟回调进场）`,
-                executed: false, // WebSocket检测的趋势信号不执行交易
-                notExecutedReason: "仅趋势信号，等待完整信号（15分钟趋势 + 5分钟回调）"
-              }, ...prev.slice(0, 49)];
-            });
-          }
-        }
-
-        return newMap;
-      });
-    };
-
-    wsRef.current.onerror = (error) => {
-      addSystemLog("WebSocket 连接错误", 'error');
-      setError("WebSocket连接错误");
-    };
-
-    wsRef.current.onclose = () => {
-      addSystemLog("WebSocket 连接已关闭", 'warning');
-    };
-  };
-
-  // 获取K线历史数据
-  const fetchKlines = async (symbol: string) => {
-    try {
-      const response = await fetch(
-        `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=200`
-      );
-      const data = await response.json();
-
-      const klines: KLineData[] = data.map((k: any[]) => ({
-        timestamp: k[0],
-        open: parseFloat(k[1]),
-        high: parseFloat(k[2]),
-        low: parseFloat(k[3]),
-        close: parseFloat(k[4]),
-        volume: parseFloat(k[5]),
-      }));
-
-      setKlineData((prev) => {
-        const newMap = new Map(prev);
-        newMap.set(symbol, klines);
-        return newMap;
-      });
-    } catch (err: any) {
-      console.error(`获取${symbol}K线数据失败:`, err);
-    }
-  };
 
   // 手动重置每日交易计数
   const resetDailyTradesCount = () => {
     setDailyTradesCount(0);
-  };
-
-  // 开始/停止实时监控（仅WebSocket监控，不执行交易）
-  const toggleMonitoring = () => {
-    if (isTrading) {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-      setIsTrading(false);
-      // 停止监控时不影响自动交易
-    } else {
-      if (selectedSymbols.length === 0) {
-        setError("请至少选择一个合约进行实时监控");
-        return;
-      }
-      connectWebSocket();
-      setIsTrading(true);
-      addSystemLog("开始实时监控模式（仅监控不交易）", 'info');
-    }
   };
 
   // 开启/停止自动交易
@@ -2261,13 +2127,6 @@ export default function BinanceAutoTrader() {
       addSystemLog("自动交易已开启，等待扫描触发", 'success');
     }
   };
-
-  // 监控开始时获取历史数据
-  useEffect(() => {
-    if (isTrading && selectedSymbols.length > 0) {
-      selectedSymbols.forEach((symbol) => fetchKlines(symbol));
-    }
-  }, [isTrading, selectedSymbols]);
 
   // 组件卸载时清理
   useEffect(() => {
@@ -2684,55 +2543,6 @@ export default function BinanceAutoTrader() {
                 })}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
-
-      {/* 合约选择 */}
-      {connected && !autoScanAll && (
-        <div className="bg-gray-800 rounded-lg p-6">
-          <h2 className="text-xl font-bold mb-4">选择监控合约</h2>
-          <div className="bg-blue-900/20 rounded-lg p-4 mb-4">
-            <div className="text-sm text-blue-300">
-              <strong className="text-blue-400">功能说明：</strong>
-              <ul className="list-disc list-inside mt-2 space-y-1">
-                <li>实时推送选定合约的K线数据</li>
-                <li>显示实时图表和趋势信号</li>
-                <li><strong>不执行交易</strong>，仅用于监控和观察</li>
-              </ul>
-              <div className="mt-3 p-2 bg-blue-800/30 rounded text-xs">
-                💡 提示：如需自动交易，请开启下方的"自动扫描所有合约"功能，它会自动扫描高成交量合约并执行交易
-              </div>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2 max-h-60 overflow-y-auto">
-            {symbols.map((symbol) => (
-              <label
-                key={symbol.symbol}
-                className={`flex items-center gap-2 p-2 rounded cursor-pointer transition ${
-                  selectedSymbols.includes(symbol.symbol)
-                    ? "bg-blue-600"
-                    : "bg-gray-700 hover:bg-gray-600"
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedSymbols.includes(symbol.symbol)}
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      setSelectedSymbols([...selectedSymbols, symbol.symbol]);
-                    } else {
-                      setSelectedSymbols(selectedSymbols.filter((s) => s !== symbol.symbol));
-                    }
-                  }}
-                  className="w-4 h-4"
-                />
-                <span className="text-sm">{symbol.symbol}</span>
-              </label>
-            ))}
-          </div>
-          <div className="mt-4 text-sm text-gray-400">
-            已选择: {selectedSymbols.length} 个合约
           </div>
         </div>
       )}
@@ -3306,34 +3116,6 @@ export default function BinanceAutoTrader() {
         <div className="bg-gray-800 rounded-lg p-6">
           <h2 className="text-xl font-bold mb-4">交易控制</h2>
 
-          {/* 实时监控控制 */}
-          <div className="mb-6 p-4 bg-blue-900/20 rounded-lg">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h3 className="font-bold text-blue-400 mb-1">📊 实时监控（仅查看行情）</h3>
-                <div className="text-xs text-blue-300">
-                  WebSocket实时推送选定合约的K线数据和趋势信号，<strong>不执行交易</strong>
-                </div>
-              </div>
-              <button
-                onClick={toggleMonitoring}
-                className={`px-4 py-2 rounded font-medium transition ${
-                  isTrading
-                    ? "bg-red-600 hover:bg-red-700"
-                    : "bg-green-600 hover:bg-green-700"
-                }`}
-              >
-                {isTrading ? "停止监控" : "开始监控"}
-              </button>
-            </div>
-            {isTrading && (
-              <div className="flex items-center gap-2 text-green-500">
-                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                <span className="text-sm">正在监控 {selectedSymbols.length} 个合约</span>
-              </div>
-            )}
-          </div>
-
           {/* 自动交易控制 */}
           <div className="p-4 bg-green-900/20 rounded-lg">
             <div className="flex items-center justify-between mb-3">
@@ -3363,16 +3145,10 @@ export default function BinanceAutoTrader() {
           </div>
 
           {/* 状态显示 */}
-          {(isTrading || autoTrading) && (
+          {autoTrading && (
             <div className="mt-4 p-4 bg-gray-700 rounded-lg">
               <div className="font-bold text-white mb-2">运行状态</div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                <div>
-                  <span className="text-gray-400">实时监控:</span>
-                  <span className={isTrading ? "text-green-500 ml-1" : "text-gray-500 ml-1"}>
-                    {isTrading ? "运行中" : "未启动"}
-                  </span>
-                </div>
                 <div>
                   <span className="text-gray-400">自动交易:</span>
                   <span className={autoTrading ? "text-green-500 ml-1" : "text-gray-500 ml-1"}>
@@ -3566,69 +3342,6 @@ export default function BinanceAutoTrader() {
         </div>
       )}
 
-      {/* 实时交易信息 */}
-      {isTrading && signals.length > 0 && (
-        <div className="bg-gray-800 rounded-lg p-6">
-          <h2 className="text-xl font-bold mb-4">实时交易信号</h2>
-          <div className="space-y-2 max-h-96 overflow-y-auto">
-            {signals.map((signal, index) => (
-              <div
-                key={index}
-                className={`p-4 rounded-lg border ${
-                  signal.direction === "long"
-                    ? "bg-green-900/20 border-green-800"
-                    : "bg-red-900/20 border-red-800"
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={`px-2 py-1 rounded text-xs font-bold ${
-                        signal.direction === "long" ? "bg-green-600" : "bg-red-600"
-                      }`}
-                    >
-                      {signal.direction === "long" ? "做多" : "做空"}
-                    </span>
-                    <span className="font-bold text-lg">{signal.symbol}</span>
-                    {signal.executed !== undefined && (
-                      <span
-                        className={`px-2 py-1 rounded text-xs font-bold ${
-                          signal.executed ? "bg-blue-600" : "bg-orange-600"
-                        }`}
-                      >
-                        {signal.executed ? "已执行" : "未执行"}
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <div className="text-lg font-bold">{formatNumber(signal.entryPrice, 2)}</div>
-                    <div className="text-xs text-gray-400">{formatTime(signal.time)}</div>
-                  </div>
-                </div>
-                <div className="mt-2 text-sm text-gray-300">{signal.reason}</div>
-                {signal.notExecutedReason && (
-                  <div className="mt-1 text-xs text-orange-400">
-                    ⚠️ {signal.notExecutedReason}
-                  </div>
-                )}
-                <div className="mt-2 flex items-center gap-2">
-                  <span className="text-sm text-gray-400">置信度:</span>
-                  <div className="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full ${
-                        signal.confidence >= 0.7 ? "bg-green-500" : "bg-yellow-500"
-                      }`}
-                      style={{ width: `${signal.confidence * 100}%` }}
-                    />
-                  </div>
-                  <span className="text-sm">{(signal.confidence * 100).toFixed(0)}%</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* 扫描日志 */}
       {(scanLog.length > 0 || isScanning) && (
         <div className="bg-gray-800 rounded-lg p-6">
@@ -3668,7 +3381,7 @@ export default function BinanceAutoTrader() {
       )}
 
       {/* 系统日志 */}
-      {(systemLog.length > 0 || isTrading || autoTrading) && (
+      {(systemLog.length > 0 || autoTrading) && (
         <div className="bg-gray-800 rounded-lg p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-bold">📝 系统日志</h2>
@@ -3919,71 +3632,6 @@ export default function BinanceAutoTrader() {
                 })}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
-
-      {/* 实时价格 */}
-      {isTrading && selectedSymbols.length > 0 && (
-        <div className="bg-gray-800 rounded-lg p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold">实时价格</h2>
-            {/* 持仓监控状态 */}
-            {isTrading && connected && autoTrading && positions.length > 0 && (
-              <div className="flex items-center gap-2 text-sm">
-                <span className="animate-pulse">📊</span>
-                <span className="text-green-400">持仓监控中</span>
-                <span className="text-gray-400 text-xs">
-                  ({positions.length}个持仓，每2秒检查)
-                </span>
-              </div>
-            )}
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-            {selectedSymbols.map((symbol) => {
-              const data = klineData.get(symbol);
-              const currentPrice = data?.[data.length - 1]?.close || 0;
-              const prevPrice = data?.[data.length - 2]?.close || currentPrice;
-              const priceChange = prevPrice > 0 ? ((currentPrice - prevPrice) / prevPrice) * 100 : 0;
-              const position = positions.find((p) => p.symbol === symbol);
-              const hasPosition = position !== undefined;
-
-              // 获取合约精度信息
-              const symbolInfo = symbols.find(s => s.symbol === symbol);
-              const pricePrecision = symbolInfo?.pricePrecision ?? 2;
-
-              return (
-                <div
-                  key={symbol}
-                  className={`bg-gray-700 rounded-lg p-4 border-2 transition ${
-                    hasPosition ? "border-blue-500" : "border-transparent"
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <p className="font-bold">{symbol}</p>
-                    {hasPosition && (
-                      <span className="w-2 h-2 bg-blue-500 rounded-full" />
-                    )}
-                  </div>
-                  <p className={`text-lg mt-2 ${priceChange >= 0 ? "text-green-500" : "text-red-500"}`}>
-                    {currentPrice > 0 ? currentPrice.toFixed(pricePrecision) : "-"}
-                  </p>
-                  <p className={`text-sm ${priceChange >= 0 ? "text-green-500" : "text-red-500"}`}>
-                    {priceChange >= 0 ? "+" : ""}
-                    {priceChange.toFixed(2)}%
-                  </p>
-                  {position && (
-                    <div className="mt-2 pt-2 border-t border-gray-600">
-                      <p className="text-xs text-gray-400">持仓: {Math.abs(position.positionAmt).toFixed(4)}</p>
-                      <p className={`text-xs ${position.unRealizedProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
-                        {position.unRealizedProfit >= 0 ? "+" : ""}
-                        {position.unRealizedProfit.toFixed(2)} USDT
-                      </p>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
           </div>
         </div>
       )}
