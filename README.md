@@ -2,8 +2,9 @@
 
 基于 Next.js 16 的加密货币日内交易系统，支持策略回测和币安期货自动交易功能。
 
-## 功能特性
+## ✨ 功能特性
 
+### 核心功能
 - ✅ **15分钟趋势过滤 + 5分钟回调进场**策略
 - ✅ 支持多合约同时监控
 - ✅ 分段止盈策略（1R平50%，2R全平）
@@ -13,37 +14,48 @@
 - ✅ 支持1-125倍杠杆配置
 - ✅ 仅支持币安主网真实交易
 
-## 技术栈
+### 平台支持
+- 🌐 **Web 应用**：支持电脑、手机、平板访问
+- 📱 **响应式设计**：自动适配各种屏幕尺寸
+- 🎨 **深色主题**：保护视力，节省电量
+- ⚡ **实时数据**：WebSocket 实时推送交易信号
+- 🔒 **本地存储**：API 密钥存储在浏览器本地
 
-- **前端框架**: Next.js 16 (App Router)
-- **UI框架**: React 19 + Tailwind CSS 4
-- **图表库**: Lightweight Charts 4.1.1
-- **API**: Binance Futures API (Mainnet Only)
-- **实时通信**: WebSocket
-- **语言**: TypeScript 5
+## 🚀 快速部署
 
-## 系统要求
+### 云端部署（推荐）
 
-- Node.js 24.x 或更高版本
-- pnpm 包管理器
-- 浏览器：Chrome、Edge、Firefox 最新版
+#### Vercel 部署（免费）
 
-## 快速开始
+```bash
+# 1. 安装 Vercel CLI
+npm i -g vercel
 
-### 1. 克隆项目
+# 2. 登录并部署
+vercel login
+vercel --prod
+```
+
+或者直接在 [vercel.com](https://vercel.com) 上导入 GitHub 仓库。
+
+详细步骤请查看 [云端部署指南](CLOUD_DEPLOYMENT_GUIDE.md)
+
+### 本地开发
+
+#### 1. 克隆项目
 
 ```bash
 git clone <你的仓库地址>
 cd <项目目录>
 ```
 
-### 2. 安装依赖
+#### 2. 安装依赖
 
 ```bash
 pnpm install
 ```
 
-### 3. 启动开发服务
+#### 3. 启动开发服务
 
 ```bash
 pnpm dev
@@ -51,11 +63,42 @@ pnpm dev
 
 服务将运行在 `http://localhost:5000`
 
-### 4. 访问应用
+#### 4. 访问应用
 
 在浏览器中打开 `http://localhost:5000`
 
-## 使用说明
+## 💻 技术栈
+
+### 前端
+- **框架**: Next.js 16 (App Router)
+- **UI**: React 19 + Tailwind CSS 4
+- **图表**: Lightweight Charts 4.1.1
+- **语言**: TypeScript 5
+
+### 后端
+- **API**: Next.js API Routes
+- **通信**: WebSocket
+- **集成**: Binance Futures API (Mainnet)
+
+### 部署
+- **平台**: Vercel / Railway / Docker
+- **协议**: HTTPS 自动配置
+- **CDN**: 全球节点加速
+
+## 📱 多端使用
+
+### 电脑端
+- 使用 Chrome、Edge、Firefox 等现代浏览器
+- 访问应用 URL
+
+### 手机端
+- 在手机浏览器访问应用 URL
+- 支持触摸操作
+- 推荐添加到主屏幕使用（像原生应用）
+
+详细说明请查看 [移动端使用指南](MOBILE_USER_GUIDE.md)
+
+## 📖 使用说明
 
 ### 第一步：连接币安账户
 
@@ -63,20 +106,24 @@ pnpm dev
 2. 点击"连接币安账户"
 3. 系统会验证 API 密钥的有效性
 
-**注意**：
-- API 密钥仅存储在浏览器本地，不会上传到服务器
-- 确保你的 API 密钥有期货交易权限
-- 建议在币安 API 设置中限制 IP 白名单
+**重要提示**：
+- ✅ API 密钥仅存储在浏览器 localStorage，不会上传到服务器
+- ✅ 每个用户需配置自己的 API 密钥
+- ⚠️ 确保你的 API 密钥有期货交易权限
+- ⚠️ 建议在币安 API 设置中限制 IP 白名单
 
-### 第二步：选择监控合约
+### 第二步：选择交易策略
 
-1. 在"选择监控合约"区域勾选要监控的合约
-2. 系统会自动加载热门合约列表（BTCUSDT、ETHUSDT 等）
-3. 可以手动搜索其他合约
+系统内置了策略管理器，支持多种策略：
+
+1. **15分钟趋势 + 5分钟回调**（默认）
+   - 适合趋势跟踪交易
+   - 自动识别趋势方向
+   - 等待回调入场
+
+未来可扩展更多策略...
 
 ### 第三步：配置交易参数
-
-在"交易配置"区域设置以下参数：
 
 #### 策略参数
 - **EMA Short**: 短周期均线（默认20）
@@ -101,9 +148,10 @@ pnpm dev
 
 ### 第四步：开始监控
 
-1. 点击"开始监控"按钮
-2. 系统会连接 WebSocket 并开始接收实时数据
-3. 在"实时交易信号"区域查看检测到的信号
+1. 在"选择监控合约"区域勾选要监控的合约
+2. 点击"开始监控"按钮
+3. 系统会连接 WebSocket 并开始接收实时数据
+4. 在"实时交易信号"区域查看检测到的信号
 
 ### 第五步：开启自动交易（可选）
 
@@ -120,7 +168,7 @@ pnpm dev
 3. 也可以点击"立即扫描"按钮手动触发
 4. 在"扫描日志"区域查看扫描进度和结果
 
-## 策略说明
+## 📊 策略说明
 
 ### 15分钟趋势过滤
 
@@ -147,7 +195,7 @@ pnpm dev
 - 开启"移动到保本价"后，止损会移动到入场价
 - 锁定已实现的利润，防止回撤过大
 
-## 风险提示
+## ⚠️ 风险提示
 
 1. ⚠️ 本系统仅支持币安主网真实交易，不提供测试网或模拟交易
 2. ⚠️ 自动交易会使用真实资金，请务必先在手动模式下测试
@@ -156,15 +204,47 @@ pnpm dev
 5. ⚠️ 请妥善保管你的 API 密钥，不要泄露给他人
 6. ⚠️ 系统不保证盈利，仅供学习和研究使用
 
-## 常见问题
+## 🛠️ 项目结构
+
+```
+.
+├── src/
+│   ├── app/                      # Next.js App Router
+│   │   ├── api/                  # API Routes
+│   │   │   └── binance/          # 币安 API 集成
+│   │   ├── layout.tsx            # 根布局
+│   │   ├── page.tsx              # 主页面
+│   │   └── globals.css           # 全局样式
+│   ├── components/               # React 组件
+│   │   ├── BinanceAutoTrader.tsx # 自动交易主组件
+│   │   ├── CryptoBacktestTool.tsx # 回测工具
+│   │   ├── StrategySelector.tsx  # 策略选择器
+│   │   └── CandlestickChart.tsx  # K线图表
+│   ├── strategies/               # 交易策略
+│   │   └── EMA15mTrend5mPullbackStrategy.ts
+│   ├── types/                    # TypeScript 类型定义
+│   │   └── strategy.ts
+│   └── utils/                    # 工具函数
+│       └── strategyManager.ts    # 策略管理器
+├── package.json                  # 项目配置
+├── tsconfig.json                 # TypeScript 配置
+├── next.config.ts                # Next.js 配置
+├── vercel.json                   # Vercel 部署配置
+├── railway.toml                  # Railway 部署配置
+└── README.md                     # 项目说明
+```
+
+## ❓ 常见问题
 
 ### Q1: API 签名验证错误(-1022)
 
 **解决方法**：
 1. 检查 API Key 和 Secret 是否正确（不要有多余空格）
-2. 确认系统时间是否准确（Windows系统自动同步时间）
-3. 在币安 API 设置中限制 IP 白名单为你的公网IP
+2. 确认系统时间是否准确
+3. 在币安 API 设置中限制 IP 白名单
 4. 重新生成 API 密钥
+
+详细说明请查看 [API 错误排查](API_400_ERROR_TROUBLESHOOTING.md)
 
 ### Q2: 信号不显示
 
@@ -182,80 +262,41 @@ pnpm dev
 3. 检查网络连接是否正常
 4. 减少监控的合约数量
 
-### Q4: 订单执行失败
+### Q4: 移动端无法访问
 
 **解决方法**：
-1. 检查账户余额是否充足
-2. 确认合约是否有足够的流动性
-3. 检查杠杆设置是否正确
-4. 查看交易记录了解失败原因
+1. 确保使用 HTTPS 访问
+2. 使用现代浏览器（Chrome、Safari）
+3. 清除浏览器缓存
+4. 查看移动端使用指南
 
-## 项目结构
+## 📚 文档
 
-```
-.
-├── src/
-│   ├── app/
-│   │   ├── api/
-│   │   │   └── binance/
-│   │   │       ├── balance/route.ts      # 获取账户余额
-│   │   │       ├── positions/route.ts    # 获取持仓信息
-│   │   │       ├── orders/route.ts       # 获取订单列表
-│   │   │       ├── order/route.ts        # 执行交易订单
-│   │   │       └── leverage/route.ts     # 设置杠杆倍数
-│   │   ├── page.tsx                       # 主页面
-│   │   └── layout.tsx                     # 布局组件
-│   └── components/
-│       └── BinanceAutoTrader.tsx         # 主交易组件
-├── public/                                # 静态资源
-├── package.json                           # 项目依赖
-├── tsconfig.json                          # TypeScript配置
-└── .coze                                  # 项目配置（沙箱环境）
-```
+- [云端部署指南](CLOUD_DEPLOYMENT_GUIDE.md) - Vercel/Railway/Docker 部署
+- [移动端使用指南](MOBILE_USER_GUIDE.md) - 手机/平板使用说明
+- [币安交易指南](BINANCE_TRADING_GUIDE.md) - 交易功能详解
+- [自动交易测试指南](AUTO_TRADING_TEST_GUIDE.md) - 测试步骤
+- [API 错误排查](API_400_ERROR_TROUBLESHOOTING.md) - 常见 API 问题
 
-## 开发说明
+## 🔗 相关链接
 
-### 构建项目
+- [Next.js 文档](https://nextjs.org/docs)
+- [币安 API 文档](https://binance-docs.github.io/apidocs/futures/cn/)
+- [React 文档](https://react.dev)
+- [Tailwind CSS](https://tailwindcss.com)
 
-```bash
-pnpm build
-```
+## 📄 许可证
 
-### 生产环境部署
+MIT License
 
-```bash
-pnpm start
-```
+## 🤝 贡献
 
-### 类型检查
+欢迎提交 Issue 和 Pull Request！
 
-```bash
-pnpm tsc --noEmit
-```
+## 📞 技术支持
 
-## 更新日志
-
-### v1.0.0 (2025-01-08)
-- ✅ 实现15分钟趋势过滤 + 5分钟回调进场策略
-- ✅ 支持分段止盈和移动止损
-- ✅ 新增杠杆设置功能（1-125倍）
-- ✅ 优化信号检测，显示详细原因
-- ✅ 修复自动扫描卡死问题
-- ✅ 优化 WebSocket 数据同步
-- ✅ 移除测试网支持，仅支持主网真实交易
-
-## 许可证
-
-本项目仅供学习和研究使用。
-
-## 免责声明
-
-本软件仅供学习和研究目的，不构成任何投资建议。使用本软件进行交易的所有风险由用户自行承担。开发者不对任何损失负责。
-
-## 联系方式
-
-如有问题或建议，请提交 Issue 或 Pull Request。
+如有问题，请在 GitHub 上提交 Issue。
 
 ---
 
-**祝您交易顺利！** 📈
+**⚠️ 重要提示**：本系统仅供学习和研究使用，数字货币交易存在高风险，请谨慎投资！
