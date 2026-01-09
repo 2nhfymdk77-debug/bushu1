@@ -1120,27 +1120,27 @@ export default function BinanceAutoTrader() {
       setSymbols(usdtSymbols);
       addSystemLog(`加载了 ${usdtSymbols.length} 个 USDT 永续合约`, 'success');
 
-      // 获取账户余额
+      // 获取账户信息
       if (apiKey && apiSecret) {
-        addSystemLog("正在获取账户余额...", 'info');
-        const balanceResponse = await fetch("/api/binance/balance", {
+        addSystemLog("正在获取账户信息...", 'info');
+        const accountResponse = await fetch("/api/binance/account", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ apiKey, apiSecret }),
         });
 
-        if (balanceResponse.ok) {
-          const balanceData = await balanceResponse.json();
-          setAccountBalance(balanceData);
-          addSystemLog(`账户余额: ${balanceData.available.toFixed(2)} USDT`, 'success');
+        if (accountResponse.ok) {
+          const accountData = await accountResponse.json();
+          setAccountBalance(accountData);
+          addSystemLog(`账户可用余额: ${accountData.available.toFixed(2)} USDT (钱包: ${accountData.wallet.toFixed(2)})`, 'success');
         } else {
-          const errorData = await balanceResponse.json();
-          const errorMsg = `获取余额失败: ${errorData.error}`;
+          const errorData = await accountResponse.json();
+          const errorMsg = `获取账户信息失败: ${errorData.error}`;
           addSystemLog(errorMsg, 'error');
           throw new Error(errorMsg);
         }
       } else {
-        addSystemLog("未提供 API 凭证，跳过余额获取", 'warning');
+        addSystemLog("未提供 API 凭证，跳过账户信息获取", 'warning');
       }
 
       setConnected(true);
@@ -1174,21 +1174,27 @@ export default function BinanceAutoTrader() {
     try {
       console.log('[fetchAccountInfo] Fetching account info...');
 
-      // 获取余额
-      const balanceResponse = await fetch("/api/binance/balance", {
+      // 获取账户信息（包含准确的可用保证金）
+      const accountResponse = await fetch("/api/binance/account", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ apiKey, apiSecret }),
       });
 
-      if (balanceResponse.ok) {
-        const balanceData = await balanceResponse.json();
-        setAccountBalance(balanceData);
-        console.log('[fetchAccountInfo] Balance fetched:', balanceData);
+      if (accountResponse.ok) {
+        const accountData = await accountResponse.json();
+        setAccountBalance(accountData);
+        console.log('[fetchAccountInfo] Account info fetched:', {
+          available: accountData.available,
+          wallet: accountData.wallet,
+          unrealizedPnl: accountData.unrealizedPnl,
+          totalPositionMargin: accountData.totalPositionMargin
+        });
+        addSystemLog(`账户可用余额: ${accountData.available.toFixed(2)} USDT (钱包: ${accountData.wallet.toFixed(2)})`, 'info');
       } else {
-        const errorData = await balanceResponse.json();
-        console.error('[fetchAccountInfo] Balance error:', errorData);
-        setError(`获取余额失败: ${errorData.error}`);
+        const errorData = await accountResponse.json();
+        console.error('[fetchAccountInfo] Account error:', errorData);
+        setError(`获取账户信息失败: ${errorData.error}`);
       }
 
       // 获取持仓
@@ -1901,6 +1907,9 @@ export default function BinanceAutoTrader() {
       const availableBalance = accountBalance.available;
       const positionValue = availableBalance * (tradingConfig.positionSizePercent / 100);
       let quantity = positionValue / signal.entryPrice;
+
+      // 记录仓位计算信息
+      addSystemLog(`仓位计算: 可用=${availableBalance.toFixed(2)}USDT, 比例=${tradingConfig.positionSizePercent}%, 名义价值=${positionValue.toFixed(2)}USDT, 数量=${quantity.toFixed(4)}`, 'info');
 
       // 计算止损止盈
       const stopLossPrice = signal.direction === "long"
