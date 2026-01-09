@@ -91,20 +91,6 @@ const STRATEGIES = [
     description: "多时间框架策略：使用自定义周期EMA确认趋势方向，在小周期图中寻找回调进场点。结合RSI、成交量、K线颜色等多重过滤条件。",
     icon: "📈",
     params: ["trendTimeframe", "entryTimeframe", "emaShort", "emaLong", "rsiPeriod", "volumePeriod", "stopLossPercent", "stopLossPositionSize", "takeProfitPercent", "takeProfitPositionSize", "leverage", "minTrendDistance"]
-  },
-  {
-    id: "rsi_reversal",
-    name: "RSI超买超卖反转策略",
-    description: "利用RSI指标识别超买超卖区域，捕捉价格反转机会。",
-    icon: "🔄",
-    params: ["rsiPeriod", "stopLossPercent", "stopLossPositionSize", "takeProfitPercent", "takeProfitPositionSize", "leverage"]
-  },
-  {
-    id: "breakout",
-    name: "突破策略",
-    description: "识别关键支撑阻力位的突破，捕捉趋势启动信号。",
-    icon: "🚀",
-    params: ["volumePeriod", "stopLossPercent", "stopLossPositionSize", "takeProfitPercent", "takeProfitPositionSize", "leverage"]
   }
 ];
 
