@@ -5,7 +5,6 @@ import {
   SignalDetectionResult,
   KLineData,
 } from "../types/strategy";
-import { EMATrendPullbackStrategy } from "./EMA15mTrend5mPullbackStrategy";
 import { SMCLiquidityFVGStrategy } from "./SMCLiquidityFVGStrategy";
 
 /**
@@ -35,7 +34,6 @@ export class StrategyManager {
    * 注册默认策略
    */
   private registerDefaultStrategies(): void {
-    this.register("ema_trend_recognition", new EMATrendPullbackStrategy());
     this.register("smc_liquidity_fvg", new SMCLiquidityFVGStrategy());
   }
 

@@ -10,7 +10,7 @@ import {
   StrategyMeta
 } from "../types/strategy";
 
-import { EMATrendPullbackStrategy } from "../strategies/EMA15mTrend5mPullbackStrategy";
+import { SMCLiquidityFVGStrategy } from "../strategies/SMCLiquidityFVGStrategy";
 
 /**
  * 策略管理器类
@@ -22,7 +22,7 @@ class StrategyManager {
   // 私有构造函数，实现单例模式
   private constructor() {
     // 注册内置策略
-    this.registerStrategy(new EMATrendPullbackStrategy());
+    this.registerStrategy(new SMCLiquidityFVGStrategy());
   }
 
   /**

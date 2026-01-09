@@ -2,7 +2,6 @@
 
 import React, { useState } from "react";
 import CandlestickChart from "./CandlestickChart";
-import { EMATrendPullbackStrategy, EMATrendPullbackParams } from "../strategies/EMA15mTrend5mPullbackStrategy";
 import { SMCLiquidityFVGStrategy, SMCLiquidityFVGParams } from "../strategies/SMCLiquidityFVGStrategy";
 import { alignTimeframes, getMainBars, getMidBars, getLowBars, isMainBarUpdated } from "../utils/timeframeAligner";
 import { LiquidityFVGTracker } from "../utils/liquidityFVGTracker";
@@ -61,21 +60,6 @@ interface BacktestResult {
 }
 
 export interface StrategyParams {
-  // EMA 策略参数
-  trendTimeframe?: string;
-  entryTimeframe?: string;
-  emaShort?: number;
-  emaLong?: number;
-  rsiPeriod?: number;
-  volumePeriod?: number;
-  stopLossPercent?: number;
-  stopLossPositionSize?: number;
-  takeProfitPercent?: number;
-  takeProfitPositionSize?: number;
-  leverage?: number;
-  riskPercent?: number;
-  minTrendDistance?: number;
-
   // SMC 策略参数
   mainTimeframe?: string;
   midTimeframe?: string;
@@ -90,6 +74,7 @@ export interface StrategyParams {
   stopLossBuffer?: number;
   takeProfitTP1?: number;
   takeProfitTP2?: number;
+  riskPercent?: number;
   maxConsecutiveLosses?: number;
   cooldownBars?: number;
   minVolumeRatio?: number;
@@ -104,27 +89,28 @@ export interface StrategyParams {
   symbol: string;
   startDate: string;
   endDate: string;
-
-  // EMA 策略必需的默认值
-  stopLossPercentRequired: number;
-  takeProfitPercentRequired: number;
-  leverageRequired: number;
 }
 
 export const DEFAULT_PARAMS: StrategyParams = {
-  trendTimeframe: "15m",
-  entryTimeframe: "5m",
-  emaShort: 20,
-  emaLong: 60,
-  rsiPeriod: 14,
-  volumePeriod: 20,
-  stopLossPercent: 0.4,
-  stopLossPositionSize: 100,
-  takeProfitPercent: 1.5,
-  takeProfitPositionSize: 100,
-  leverage: 3,
-  riskPercent: 2,
-  minTrendDistance: 0.15,
+  mainTimeframe: "15m",
+  midTimeframe: "5m",
+  lowTimeframe: "1m",
+  liquidityLookback: 20,
+  liquidityTolerance: 0.05,
+  displacementThreshold: 1.5,
+  displacementMinBars: 3,
+  fvgMinSize: 0.01,
+  fvgMaxSize: 0.5,
+  entryFVGPercent: 0.5,
+  stopLossBuffer: 0.01,
+  takeProfitTP1: 0.8,
+  takeProfitTP2: 1.5,
+  riskPercent: 1,
+  maxConsecutiveLosses: 3,
+  cooldownBars: 20,
+  minVolumeRatio: 1.2,
+  filterSideways: true,
+  adxThreshold: 20,
   initialCapital: 10000,
   maxPositionPercent: 30,
   makerFee: 0.02,
@@ -132,21 +118,10 @@ export const DEFAULT_PARAMS: StrategyParams = {
   symbol: "BTCUSDT",
   startDate: "",
   endDate: "",
-  // EMA 策略必需的默认值
-  stopLossPercentRequired: 0.4,
-  takeProfitPercentRequired: 1.5,
-  leverageRequired: 3,
 };
 
 // 策略定义
 const STRATEGIES = [
-  {
-    id: "ema_trend_recognition",
-    name: "EMA趋势识别",
-    description: "多时间框架策略：使用自定义周期EMA确认趋势方向，在小周期图中寻找回调进场点。结合RSI、成交量、K线颜色等多重过滤条件。",
-    icon: "📈",
-    params: ["trendTimeframe", "entryTimeframe", "emaShort", "emaLong", "rsiPeriod", "volumePeriod", "stopLossPercent", "stopLossPositionSize", "takeProfitPercent", "takeProfitPositionSize", "leverage", "minTrendDistance"]
-  },
   {
     id: "smc_liquidity_fvg",
     name: "SMC 流动性 + FVG",
@@ -159,7 +134,7 @@ const STRATEGIES = [
 export default function CryptoBacktestTool() {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [selectedStrategy, setSelectedStrategy] = useState(STRATEGIES[0].id);
-  const strategy = new EMATrendPullbackStrategy();
+  const strategy = new SMCLiquidityFVGStrategy();
   const strategyDefaultParams = strategy.getDefaultParams();
 
   const [params, setParams] = useState<StrategyParams>({
@@ -169,47 +144,48 @@ export default function CryptoBacktestTool() {
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [klines15m, setKlines15m] = useState<KLine[]>([]);
   const [klines5m, setKlines5m] = useState<KLine[]>([]);
-  const [emaShort15m, setEmaShort15m] = useState<number[]>([]);
-  const [emaLong15m, setEmaLong15m] = useState<number[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showTrades, setShowTrades] = useState(false);
 
   // 获取当前策略
   const currentStrategy = STRATEGIES.find(s => s.id === selectedStrategy);
 
-  // 步骤1：选择策略
+  // 步骤1：策略信息展示
   if (step === 1) {
     return (
       <div className="animate-fadeIn">
         <div className="text-center mb-8">
-          <h2 className="text-2xl font-bold mb-2">选择回测策略</h2>
-          <p className="text-gray-400">选择一个策略开始回测</p>
+          <h2 className="text-2xl font-bold mb-2">SMC 流动性 + FVG 回测策略</h2>
+          <p className="text-gray-400">基于 ICT/SMC 理论的智能资金策略。识别流动性扫荡、确认机构位移，通过 FVG 回踩进行低风险入场。</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          {STRATEGIES.map((strategy) => (
-            <div
-              key={strategy.id}
-              onClick={() => setSelectedStrategy(strategy.id)}
-              className={`cursor-pointer rounded-xl p-6 border-2 transition-all ${
-                selectedStrategy === strategy.id
-                  ? "border-blue-500 bg-blue-500/10"
-                  : "border-gray-700 bg-gray-800 hover:border-gray-600"
-              }`}
-            >
-              <div className="text-4xl mb-4">{strategy.icon}</div>
-              <h3 className="text-lg font-bold mb-2">{strategy.name}</h3>
-              <p className="text-sm text-gray-400">{strategy.description}</p>
-              {selectedStrategy === strategy.id && (
-                <div className="mt-4 flex items-center text-blue-400 text-sm">
-                  <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                  </svg>
-                  已选择
-                </div>
-              )}
+        <div className="bg-gray-800 rounded-xl p-6 mb-8">
+          <div className="flex items-start justify-between mb-4">
+            <div className="text-4xl mb-4">💧</div>
+            <div className="px-3 py-1 rounded-full bg-red-500/20 text-red-400 border border-red-500/30 text-sm">
+              高风险
             </div>
-          ))}
+          </div>
+          <h3 className="text-lg font-bold mb-2">{STRATEGIES[0].name}</h3>
+          <p className="text-sm text-gray-400 mb-4">{STRATEGIES[0].description}</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div>
+              <div className="text-gray-400">版本</div>
+              <div className="font-medium">1.0.0</div>
+            </div>
+            <div>
+              <div className="text-gray-400">分类</div>
+              <div className="font-medium">Smart Money Concepts</div>
+            </div>
+            <div>
+              <div className="text-gray-400">支持周期</div>
+              <div className="font-medium">1m, 5m, 15m</div>
+            </div>
+            <div>
+              <div className="text-gray-400">风险等级</div>
+              <div className="font-medium text-red-400">高</div>
+            </div>
+          </div>
         </div>
 
         <div className="flex justify-end">
@@ -247,367 +223,177 @@ export default function CryptoBacktestTool() {
               策略参数
             </h3>
             <div className="space-y-4">
-              {currentStrategy?.params.includes("trendTimeframe") && (
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">趋势识别周期</label>
-                  <select
-                    value={params.trendTimeframe}
-                    onChange={(e) => setParams({ ...params, trendTimeframe: e.target.value })}
-                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                  >
-                    <option value="1m">1分钟</option>
-                    <option value="3m">3分钟</option>
-                    <option value="5m">5分钟</option>
-                    <option value="15m">15分钟</option>
-                    <option value="30m">30分钟</option>
-                    <option value="1h">1小时</option>
-                    <option value="2h">2小时</option>
-                    <option value="4h">4小时</option>
-                    <option value="6h">6小时</option>
-                    <option value="8h">8小时</option>
-                    <option value="12h">12小时</option>
-                    <option value="1d">1天</option>
-                  </select>
-                </div>
-              )}
-              {currentStrategy?.params.includes("entryTimeframe") && (
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">进场信号周期</label>
-                  <select
-                    value={params.entryTimeframe}
-                    onChange={(e) => setParams({ ...params, entryTimeframe: e.target.value })}
-                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                  >
-                    <option value="1m">1分钟</option>
-                    <option value="3m">3分钟</option>
-                    <option value="5m">5分钟</option>
-                    <option value="15m">15分钟</option>
-                    <option value="30m">30分钟</option>
-                    <option value="1h">1小时</option>
-                    <option value="2h">2小时</option>
-                    <option value="4h">4小时</option>
-                    <option value="6h">6小时</option>
-                    <option value="8h">8小时</option>
-                    <option value="12h">12小时</option>
-                    <option value="1d">1天</option>
-                  </select>
-                </div>
-              )}
-              {currentStrategy?.params.includes("emaShort") && (
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">EMA短期周期</label>
-                  <input
-                    type="number"
-                    value={params.emaShort}
-                    onChange={(e) => setParams({ ...params, emaShort: Number(e.target.value) })}
-                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                  />
-                </div>
-              )}
-              {currentStrategy?.params.includes("emaLong") && (
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">EMA长期周期</label>
-                  <input
-                    type="number"
-                    value={params.emaLong}
-                    onChange={(e) => setParams({ ...params, emaLong: Number(e.target.value) })}
-                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                  />
-                </div>
-              )}
-              {currentStrategy?.params.includes("rsiPeriod") && (
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">RSI周期</label>
-                  <input
-                    type="number"
-                    value={params.rsiPeriod}
-                    onChange={(e) => setParams({ ...params, rsiPeriod: Number(e.target.value) })}
-                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                  />
-                </div>
-              )}
-              {currentStrategy?.params.includes("volumePeriod") && (
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">成交量周期</label>
-                  <input
-                    type="number"
-                    value={params.volumePeriod}
-                    onChange={(e) => setParams({ ...params, volumePeriod: Number(e.target.value) })}
-                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                  />
-                </div>
-              )}
+              {/* SMC 策略参数 */}
               <div>
-                <label className="block text-sm text-gray-400 mb-1">止损比例 (%)</label>
+                <label className="block text-sm text-gray-400 mb-1">主周期（流动性识别）</label>
+                <select
+                  value={params.mainTimeframe || "15m"}
+                  onChange={(e) => setParams({ ...params, mainTimeframe: e.target.value })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                >
+                  <option value="5m">5 分钟</option>
+                  <option value="15m">15 分钟</option>
+                  <option value="30m">30 分钟</option>
+                  <option value="1h">1 小时</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">中周期（位移确认）</label>
+                <select
+                  value={params.midTimeframe || "5m"}
+                  onChange={(e) => setParams({ ...params, midTimeframe: e.target.value })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                >
+                  <option value="1m">1 分钟</option>
+                  <option value="5m">5 分钟</option>
+                  <option value="15m">15 分钟</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">低周期（入场）</label>
+                <select
+                  value={params.lowTimeframe || "1m"}
+                  onChange={(e) => setParams({ ...params, lowTimeframe: e.target.value })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                >
+                  <option value="1m">1 分钟</option>
+                  <option value="5m">5 分钟</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">流动性回看周期</label>
+                <input
+                  type="number"
+                  value={params.liquidityLookback || 20}
+                  onChange={(e) => setParams({ ...params, liquidityLookback: Number(e.target.value) })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">流动性容差 (%)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={params.liquidityTolerance || 0.05}
+                  onChange={(e) => setParams({ ...params, liquidityTolerance: Number(e.target.value) })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">位移阈值 (ATR倍数)</label>
                 <input
                   type="number"
                   step="0.1"
-                  value={params.stopLossPercent}
-                  onChange={(e) => setParams({ ...params, stopLossPercent: Number(e.target.value) })}
+                  value={params.displacementThreshold || 1.5}
+                  onChange={(e) => setParams({ ...params, displacementThreshold: Number(e.target.value) })}
                   className="w-full bg-gray-700 rounded px-3 py-2 text-white"
                 />
               </div>
+
               <div>
-                <label className="block text-sm text-gray-400 mb-1">止损仓位 (%)</label>
+                <label className="block text-sm text-gray-400 mb-1">最少连续K线数</label>
                 <input
                   type="number"
-                  step="10"
-                  value={params.stopLossPositionSize}
-                  onChange={(e) => setParams({ ...params, stopLossPositionSize: Number(e.target.value) })}
+                  value={params.displacementMinBars || 3}
+                  onChange={(e) => setParams({ ...params, displacementMinBars: Number(e.target.value) })}
                   className="w-full bg-gray-700 rounded px-3 py-2 text-white"
                 />
               </div>
+
               <div>
-                <label className="block text-sm text-gray-400 mb-1">止盈比例 (%)</label>
+                <label className="block text-sm text-gray-400 mb-1">FVG 最小大小 (%)</label>
+                <input
+                  type="number"
+                  step="0.005"
+                  value={params.fvgMinSize || 0.01}
+                  onChange={(e) => setParams({ ...params, fvgMinSize: Number(e.target.value) })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">FVG 最大大小 (%)</label>
                 <input
                   type="number"
                   step="0.1"
-                  value={params.takeProfitPercent}
-                  onChange={(e) => setParams({ ...params, takeProfitPercent: Number(e.target.value) })}
+                  value={params.fvgMaxSize || 0.5}
+                  onChange={(e) => setParams({ ...params, fvgMaxSize: Number(e.target.value) })}
                   className="w-full bg-gray-700 rounded px-3 py-2 text-white"
                 />
               </div>
+
               <div>
-                <label className="block text-sm text-gray-400 mb-1">止盈仓位 (%)</label>
+                <label className="block text-sm text-gray-400 mb-1">入场位置 (FVG %)</label>
                 <input
                   type="number"
-                  step="10"
-                  value={params.takeProfitPositionSize}
-                  onChange={(e) => setParams({ ...params, takeProfitPositionSize: Number(e.target.value) })}
+                  step="0.1"
+                  value={params.entryFVGPercent || 0.5}
+                  onChange={(e) => setParams({ ...params, entryFVGPercent: Number(e.target.value) })}
                   className="w-full bg-gray-700 rounded px-3 py-2 text-white"
                 />
               </div>
-              {currentStrategy?.params.includes("leverage") && (
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">杠杆倍数</label>
-                  <input
-                    type="number"
-                    value={params.leverage}
-                    onChange={(e) => setParams({ ...params, leverage: Number(e.target.value) })}
-                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                  />
-                </div>
-              )}
-              {currentStrategy?.params.includes("minTrendDistance") && (
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">最小趋势距离 (%)</label>
-                  <input
-                    type="number"
-                    step="0.05"
-                    value={params.minTrendDistance}
-                    onChange={(e) => setParams({ ...params, minTrendDistance: Number(e.target.value) })}
-                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                  />
-                </div>
-              )}
 
-              {/* SMC 策略专用参数 */}
-              {currentStrategy?.id === "smc_liquidity_fvg" && (
-                <div className="mt-6 pt-6 border-t border-gray-700">
-                  <p className="text-sm text-blue-400 mb-4 font-semibold">SMC 流动性 + FVG 策略参数</p>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">止损缓冲 (%)</label>
+                <input
+                  type="number"
+                  step="0.005"
+                  value={params.stopLossBuffer || 0.01}
+                  onChange={(e) => setParams({ ...params, stopLossBuffer: Number(e.target.value) })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                />
+              </div>
 
-                  {currentStrategy?.params.includes("mainTimeframe") && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">主周期（流动性识别）</label>
-                      <select
-                        value={params.mainTimeframe || "15m"}
-                        onChange={(e) => setParams({ ...params, mainTimeframe: e.target.value })}
-                        className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                      >
-                        <option value="5m">5 分钟</option>
-                        <option value="15m">15 分钟</option>
-                        <option value="30m">30 分钟</option>
-                        <option value="1h">1 小时</option>
-                      </select>
-                    </div>
-                  )}
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">第一目标 (%)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={params.takeProfitTP1 || 0.8}
+                  onChange={(e) => setParams({ ...params, takeProfitTP1: Number(e.target.value) })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                />
+              </div>
 
-                  {currentStrategy?.params.includes("midTimeframe") && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">中周期（位移确认）</label>
-                      <select
-                        value={params.midTimeframe || "5m"}
-                        onChange={(e) => setParams({ ...params, midTimeframe: e.target.value })}
-                        className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                      >
-                        <option value="1m">1 分钟</option>
-                        <option value="5m">5 分钟</option>
-                        <option value="15m">15 分钟</option>
-                      </select>
-                    </div>
-                  )}
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">第二目标 (%)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={params.takeProfitTP2 || 1.5}
+                  onChange={(e) => setParams({ ...params, takeProfitTP2: Number(e.target.value) })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                />
+              </div>
 
-                  {currentStrategy?.params.includes("lowTimeframe") && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">低周期（入场）</label>
-                      <select
-                        value={params.lowTimeframe || "1m"}
-                        onChange={(e) => setParams({ ...params, lowTimeframe: e.target.value })}
-                        className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                      >
-                        <option value="1m">1 分钟</option>
-                        <option value="5m">5 分钟</option>
-                      </select>
-                    </div>
-                  )}
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">最小成交量比</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={params.minVolumeRatio || 1.2}
+                  onChange={(e) => setParams({ ...params, minVolumeRatio: Number(e.target.value) })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                />
+              </div>
 
-                  {currentStrategy?.params.includes("liquidityLookback") && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">流动性回看周期</label>
-                      <input
-                        type="number"
-                        value={params.liquidityLookback || 20}
-                        onChange={(e) => setParams({ ...params, liquidityLookback: Number(e.target.value) })}
-                        className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                      />
-                    </div>
-                  )}
-
-                  {currentStrategy?.params.includes("liquidityTolerance") && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">流动性容差 (%)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={params.liquidityTolerance || 0.05}
-                        onChange={(e) => setParams({ ...params, liquidityTolerance: Number(e.target.value) })}
-                        className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                      />
-                    </div>
-                  )}
-
-                  {currentStrategy?.params.includes("displacementThreshold") && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">位移阈值 (ATR倍数)</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={params.displacementThreshold || 1.5}
-                        onChange={(e) => setParams({ ...params, displacementThreshold: Number(e.target.value) })}
-                        className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                      />
-                    </div>
-                  )}
-
-                  {currentStrategy?.params.includes("displacementMinBars") && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">最少连续K线数</label>
-                      <input
-                        type="number"
-                        value={params.displacementMinBars || 3}
-                        onChange={(e) => setParams({ ...params, displacementMinBars: Number(e.target.value) })}
-                        className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                      />
-                    </div>
-                  )}
-
-                  {currentStrategy?.params.includes("fvgMinSize") && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">FVG 最小大小 (%)</label>
-                      <input
-                        type="number"
-                        step="0.005"
-                        value={params.fvgMinSize || 0.01}
-                        onChange={(e) => setParams({ ...params, fvgMinSize: Number(e.target.value) })}
-                        className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                      />
-                    </div>
-                  )}
-
-                  {currentStrategy?.params.includes("fvgMaxSize") && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">FVG 最大大小 (%)</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={params.fvgMaxSize || 0.5}
-                        onChange={(e) => setParams({ ...params, fvgMaxSize: Number(e.target.value) })}
-                        className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                      />
-                    </div>
-                  )}
-
-                  {currentStrategy?.params.includes("entryFVGPercent") && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">入场位置 (FVG %)</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={params.entryFVGPercent || 0.5}
-                        onChange={(e) => setParams({ ...params, entryFVGPercent: Number(e.target.value) })}
-                        className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                      />
-                    </div>
-                  )}
-
-                  {currentStrategy?.params.includes("stopLossBuffer") && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">止损缓冲 (%)</label>
-                      <input
-                        type="number"
-                        step="0.005"
-                        value={params.stopLossBuffer || 0.01}
-                        onChange={(e) => setParams({ ...params, stopLossBuffer: Number(e.target.value) })}
-                        className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                      />
-                    </div>
-                  )}
-
-                  {currentStrategy?.params.includes("takeProfitTP1") && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">第一目标 (%)</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={params.takeProfitTP1 || 0.8}
-                        onChange={(e) => setParams({ ...params, takeProfitTP1: Number(e.target.value) })}
-                        className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                      />
-                    </div>
-                  )}
-
-                  {currentStrategy?.params.includes("takeProfitTP2") && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">第二目标 (%)</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={params.takeProfitTP2 || 1.5}
-                        onChange={(e) => setParams({ ...params, takeProfitTP2: Number(e.target.value) })}
-                        className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                      />
-                    </div>
-                  )}
-
-                  {currentStrategy?.params.includes("minVolumeRatio") && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-1">最小成交量比</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={params.minVolumeRatio || 1.2}
-                        onChange={(e) => setParams({ ...params, minVolumeRatio: Number(e.target.value) })}
-                        className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                      />
-                    </div>
-                  )}
-
-                  {currentStrategy?.params.includes("filterSideways") && (
-                    <div className="flex items-center mt-2">
-                      <input
-                        type="checkbox"
-                        id="filterSideways"
-                        checked={params.filterSideways !== undefined ? params.filterSideways : true}
-                        onChange={(e) => setParams({ ...params, filterSideways: e.target.checked })}
-                        className="w-4 h-4 text-blue-600 rounded"
-                      />
-                      <label htmlFor="filterSideways" className="ml-2 text-sm text-gray-400">
-                        过滤震荡市
-                      </label>
-                    </div>
-                  )}
-                </div>
-              )}
+              <div className="flex items-center mt-2">
+                <input
+                  type="checkbox"
+                  id="filterSideways"
+                  checked={params.filterSideways !== undefined ? params.filterSideways : true}
+                  onChange={(e) => setParams({ ...params, filterSideways: e.target.checked })}
+                  className="w-4 h-4 text-blue-600 rounded"
+                />
+                <label htmlFor="filterSideways" className="ml-2 text-sm text-gray-400">
+                  过滤震荡市
+                </label>
+              </div>
             </div>
           </div>
 
@@ -784,8 +570,8 @@ export default function CryptoBacktestTool() {
             <h3 className="text-lg font-bold mb-4">K线图</h3>
             <CandlestickChart
               klines={klines15m}
-              emaShort={emaShort15m}
-              emaLong={emaLong15m}
+              emaShort={[]}
+              emaLong={[]}
               trades={result.trades}
               height={500}
             />
@@ -916,49 +702,6 @@ export default function CryptoBacktestTool() {
     </div>
   );
 
-  // 回测逻辑函数
-  function generateMockData() {
-    const now = Date.now();
-    const data15m: KLine[] = [];
-    const data5m: KLine[] = [];
-
-    let price = 50000;
-    const volatility = 0.002;
-
-    // 生成15分钟数据
-    for (let i = 0; i < 2880; i++) {
-      const time = now - (2880 - i) * 15 * 60 * 1000;
-      const change = (Math.random() - 0.48) * 2 * volatility * price;
-      const open = price;
-      const close = price + change;
-      const high = Math.max(open, close) + Math.random() * volatility * price;
-      const low = Math.min(open, close) - Math.random() * volatility * price;
-      const volume = Math.random() * 1000000000 + 500000000;
-
-      data15m.push({ timestamp: time, open, high, low, close, volume });
-      price = close;
-    }
-
-    // 生成5分钟数据
-    price = data15m[0].open;
-    for (let i = 0; i < 8640; i++) {
-      const time = now - (8640 - i) * 5 * 60 * 1000;
-      const change = (Math.random() - 0.48) * 2 * volatility * price;
-      const open = price;
-      const close = price + change;
-      const high = Math.max(open, close) + Math.random() * volatility * price * 0.5;
-      const low = Math.min(open, close) - Math.random() * volatility * price * 0.5;
-      const volume = Math.random() * 300000000 + 150000000;
-
-      data5m.push({ timestamp: time, open, high, low, close, volume });
-      price = close;
-    }
-
-    setKlines15m(data15m);
-    setKlines5m(data5m);
-    return { data15m, data5m };
-  }
-
   // 生成 SMC 策略用的多时间框架数据
   function generateMockDataSMC() {
     const now = Date.now();
@@ -1016,220 +759,6 @@ export default function CryptoBacktestTool() {
     setKlines15m(data15m);
     setKlines5m(data5m);
     return { data15m, data5m, data1m };
-  }
-
-  // EMA 策略回测逻辑
-  function runEMABacktest(data15m: KLine[], data5m: KLine[]): Trade[] {
-    const klineData15m: any[] = data15m.map(k => ({
-      timestamp: k.timestamp,
-      open: k.open,
-      high: k.high,
-      low: k.low,
-      close: k.close,
-      volume: k.volume,
-    }));
-    const klineData5m: any[] = data5m.map(k => ({
-      timestamp: k.timestamp,
-      open: k.open,
-      high: k.high,
-      low: k.low,
-      close: k.close,
-      volume: k.volume,
-    }));
-
-    const emaShort15m = strategy.calculateEMA(klineData15m, params.emaShort || 20);
-    const emaLong15m = strategy.calculateEMA(klineData15m, params.emaLong || 60);
-    const volumeMA15m = strategy.calculateVolumeMA(klineData15m, params.volumePeriod || 20);
-    const emaShort5m = strategy.calculateEMA(klineData5m, params.emaShort || 20);
-    const emaLong5m = strategy.calculateEMA(klineData5m, params.emaLong || 60);
-    const rsi5m = strategy.calculateRSI(klineData5m, params.rsiPeriod || 14);
-
-    const trades: Trade[] = [];
-    let inPosition = false;
-    let currentPosition: Trade | null = null;
-
-    const get15mIndex = (k5: number): number => {
-      const time5 = data5m[k5].timestamp;
-      for (let i = 0; i < data15m.length; i++) {
-        if (data15m[i].timestamp > time5) return i - 1;
-      }
-      return data15m.length - 1;
-    };
-
-    for (let i = 1; i < data5m.length; i++) {
-      if (inPosition && currentPosition) {
-        const current = data5m[i];
-        const { stopLoss, takeProfit1, direction } = currentPosition;
-
-        let exitPrice = null;
-        let exitReason = "";
-
-        if (direction === "long") {
-          if (current.low <= stopLoss) {
-            exitPrice = stopLoss;
-            exitReason = "止损";
-          } else if (current.high >= takeProfit1) {
-            exitPrice = takeProfit1;
-            exitReason = "止盈";
-          }
-        } else {
-          if (current.high >= stopLoss) {
-            exitPrice = stopLoss;
-            exitReason = "止损";
-          } else if (current.low <= takeProfit1) {
-            exitPrice = takeProfit1;
-            exitReason = "止盈";
-          }
-        }
-
-        if (exitPrice) {
-          const entryPrice = currentPosition.entryPrice;
-          const direction = currentPosition.direction;
-          const leverage = params.leverageRequired || params.leverage || 3;
-
-          const positionSize = params.initialCapital * (params.maxPositionPercent / 100);
-          const quantity = positionSize / entryPrice;
-
-          const grossPnl = direction === "long"
-            ? (exitPrice - entryPrice) / entryPrice * 100 * leverage
-            : (entryPrice - exitPrice) / entryPrice * 100 * leverage;
-
-          const entryFee = positionSize * (params.takerFee / 100);
-          const exitFee = positionSize * (params.takerFee / 100);
-          const totalFee = entryFee + exitFee;
-
-          const grossPnlUsdt = positionSize * (grossPnl / 100);
-          const netPnlUsdt = grossPnlUsdt - totalFee;
-
-          const netPnlPercent = (netPnlUsdt / positionSize) * 100;
-
-          trades.push({
-            ...currentPosition,
-            exitTime: current.timestamp,
-            exitPrice,
-            pnl: grossPnl,
-            pnlPercent: grossPnl,
-            entryFee,
-            exitFee,
-            totalFee,
-            netPnl: netPnlUsdt,
-            positionSize,
-            quantity,
-            leverage,
-            reason: exitReason,
-          });
-
-          inPosition = false;
-          currentPosition = null;
-        }
-        continue;
-      }
-
-      const index15m = get15mIndex(i);
-      if (index15m < 0) continue;
-
-      const trendDirection = strategy.getTrendDirection(
-        klineData15m,
-        emaShort15m,
-        emaLong15m,
-        volumeMA15m,
-        {
-          emaShort: params.emaShort || 20,
-          emaLong: params.emaLong || 60,
-          minTrendDistance: params.minTrendDistance || 0.15,
-          trendTimeframe: params.trendTimeframe || "15m",
-          entryTimeframe: params.entryTimeframe || "5m",
-          rsiPeriod: params.rsiPeriod || 14,
-          rsiThreshold: 50,
-          volumePeriod: params.volumePeriod || 20,
-          enablePriceEMAFilter: true,
-          enableRSIFilter: true,
-          enableTouchedEmaFilter: true,
-          enableCandleColorFilter: true,
-          emaTouchLookback: 3,
-          minCandleChangePercent: 0.1,
-          minConditionsRequired: 2,
-          stopLossPercent: params.stopLossPercentRequired || params.stopLossPercent || 0.4,
-          stopLossPositionSize: params.stopLossPositionSize || 100,
-          takeProfitPercent: params.takeProfitPercentRequired || params.takeProfitPercent || 1.5,
-          takeProfitPositionSize: params.takeProfitPositionSize || 100,
-        }
-      );
-
-      if (trendDirection === "none") continue;
-
-      const entryResult = strategy.checkEntrySignal(
-        klineData5m,
-        trendDirection,
-        emaShort5m,
-        emaLong5m,
-        rsi5m,
-        {
-          emaShort: params.emaShort || 20,
-          emaLong: params.emaLong || 60,
-          minTrendDistance: params.minTrendDistance || 0.15,
-          trendTimeframe: params.trendTimeframe || "15m",
-          entryTimeframe: params.entryTimeframe || "5m",
-          rsiPeriod: params.rsiPeriod || 14,
-          rsiThreshold: 50,
-          volumePeriod: params.volumePeriod || 20,
-          enablePriceEMAFilter: true,
-          enableRSIFilter: true,
-          enableTouchedEmaFilter: true,
-          enableCandleColorFilter: true,
-          emaTouchLookback: 3,
-          minCandleChangePercent: 0.1,
-          minConditionsRequired: 2,
-          stopLossPercent: params.stopLossPercentRequired || params.stopLossPercent || 0.4,
-          stopLossPositionSize: params.stopLossPositionSize || 100,
-          takeProfitPercent: params.takeProfitPercentRequired || params.takeProfitPercent || 1.5,
-          takeProfitPositionSize: params.takeProfitPositionSize || 100,
-        }
-      );
-
-      if (entryResult.signal) {
-        const current = data5m[i];
-        const entryPrice = current.close;
-        const stopLossPercent = params.stopLossPercentRequired || params.stopLossPercent || 0.4;
-        const takeProfitPercent = params.takeProfitPercentRequired || params.takeProfitPercent || 1.5;
-
-        const stopLoss = entryResult.type === "long"
-          ? Math.min(current.low, data5m[i - 1].low) * (1 - stopLossPercent / 100)
-          : Math.max(current.high, data5m[i - 1].high) * (1 + stopLossPercent / 100);
-
-        const takeProfit = entryResult.type === "long"
-          ? entryPrice * (1 + takeProfitPercent / 100)
-          : entryPrice * (1 - takeProfitPercent / 100);
-
-        const positionSize = params.initialCapital * (params.maxPositionPercent / 100);
-        const quantity = positionSize / entryPrice;
-
-        currentPosition = {
-          entryTime: current.timestamp,
-          exitTime: 0,
-          direction: entryResult.type,
-          entryPrice,
-          exitPrice: 0,
-          stopLoss,
-          takeProfit1: takeProfit,
-          takeProfit2: 0,
-          pnl: 0,
-          pnlPercent: 0,
-          entryFee: 0,
-          exitFee: 0,
-          totalFee: 0,
-          netPnl: 0,
-          positionSize,
-          quantity,
-          leverage: params.leverageRequired || params.leverage || 3,
-          reason: entryResult.reason || "进场",
-        };
-
-        inPosition = true;
-      }
-    }
-
-    return trades;
   }
 
   // SMC 策略回测逻辑
@@ -1381,49 +910,16 @@ export default function CryptoBacktestTool() {
     setIsLoading(true);
     setResult(null);
 
-    // 根据选择的策略生成不同的数据
-    let data15m, data5m, data1m;
-
-    if (selectedStrategy === "smc_liquidity_fvg") {
-      const generated = generateMockDataSMC();
-      data15m = generated.data15m;
-      data5m = generated.data5m;
-      data1m = generated.data1m;
-    } else {
-      const generated = generateMockData();
-      data15m = generated.data15m;
-      data5m = generated.data5m;
-      data1m = null;
-    }
+    // 生成 SMC 策略用的数据
+    const generated = generateMockDataSMC();
+    const data15m = generated.data15m;
+    const data5m = generated.data5m;
+    const data1m = generated.data1m;
 
     setTimeout(() => {
       try {
-        let trades: Trade[] = [];
-
-        // 根据策略执行不同的回测逻辑
-        if (selectedStrategy === "smc_liquidity_fvg") {
-          trades = runSMCBacktest(data15m, data5m, data1m!);
-        } else {
-          trades = runEMABacktest(data15m, data5m);
-        }
-
-        // 计算 EMA 指标用于图表显示（仅 EMA 策略）
-        if (selectedStrategy !== "smc_liquidity_fvg") {
-          const klineData15m: any[] = data15m.map(k => ({
-            timestamp: k.timestamp,
-            open: k.open,
-            high: k.high,
-            low: k.low,
-            close: k.close,
-            volume: k.volume,
-          }));
-
-          const emaShort15m = strategy.calculateEMA(klineData15m, params.emaShort || 20);
-          const emaLong15m = strategy.calculateEMA(klineData15m, params.emaLong || 60);
-
-          setEmaShort15m(emaShort15m);
-          setEmaLong15m(emaLong15m);
-        }
+        // 执行 SMC 策略回测
+        const trades = runSMCBacktest(data15m, data5m, data1m);
 
         // 计算统计结果
         const winningTrades = trades.filter(t => t.pnl > 0);
