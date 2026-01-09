@@ -666,13 +666,9 @@ export default function BinanceAutoTrader() {
 
       // 3. 移动止损
       if (tradingConfig.useTrailingStop) {
-        // 更新最高价/最低价
-        const newHighestPrice = isLong
-          ? Math.max(position.highestPrice || entryPrice, currentPrice)
-          : position.highestPrice || entryPrice;
-        const newLowestPrice = !isLong
-          ? Math.min(position.lowestPrice || entryPrice, currentPrice)
-          : position.lowestPrice || entryPrice;
+        // 更新最高价/最低价（无论是否触发，都持续跟踪极值）
+        const currentHighestPrice = Math.max(position.highestPrice || entryPrice, currentPrice);
+        const currentLowestPrice = Math.min(position.lowestPrice || entryPrice, currentPrice);
 
         // 检查是否达到触发移动止损的R值
         const triggerPrice = isLong
@@ -686,24 +682,28 @@ export default function BinanceAutoTrader() {
         // 计算移动止损价格
         let trailingStopPrice = stopLossPrice;
         let newStopLossBreakeven = position.stopLossBreakeven || false;
+        let shouldUpdatePosition = false;
 
         if (hitTrigger) {
+          shouldUpdatePosition = true;
+
           if (isLong) {
             // 多头：最高价 - 移动止损距离
             const trailingDistance = rPrice * tradingConfig.trailingStopTriggerR;
-            trailingStopPrice = newHighestPrice - trailingDistance;
+            trailingStopPrice = currentHighestPrice - trailingDistance;
+
+            // 如果配置了移动到保本价，且移动止损价格不如保本价有利
+            if (tradingConfig.trailingStopMoveToBreakeven && trailingStopPrice < entryPrice) {
+              trailingStopPrice = entryPrice;
+              newStopLossBreakeven = true;
+            }
           } else {
             // 空头：最低价 + 移动止损距离
             const trailingDistance = rPrice * tradingConfig.trailingStopTriggerR;
-            trailingStopPrice = newLowestPrice + trailingDistance;
-          }
+            trailingStopPrice = currentLowestPrice + trailingDistance;
 
-          // 如果配置了移动到保本价，且移动止损价格不如保本价有利
-          if (tradingConfig.trailingStopMoveToBreakeven) {
-            if (isLong && trailingStopPrice < entryPrice) {
-              trailingStopPrice = entryPrice;
-              newStopLossBreakeven = true;
-            } else if (!isLong && trailingStopPrice > entryPrice) {
+            // 如果配置了移动到保本价，且移动止损价格不如保本价有利
+            if (tradingConfig.trailingStopMoveToBreakeven && trailingStopPrice > entryPrice) {
               trailingStopPrice = entryPrice;
               newStopLossBreakeven = true;
             }
@@ -715,8 +715,8 @@ export default function BinanceAutoTrader() {
               if (p.symbol === symbol && p.positionSide === position.positionSide) {
                 return {
                   ...p,
-                  highestPrice: newHighestPrice,
-                  lowestPrice: newLowestPrice,
+                  highestPrice: currentHighestPrice,
+                  lowestPrice: currentLowestPrice,
                   trailingStopPrice,
                   stopLossBreakeven: newStopLossBreakeven
                 };
@@ -726,7 +726,7 @@ export default function BinanceAutoTrader() {
           );
 
           // 记录日志
-          addSystemLog(`[${symbol}] 移动止损更新: 触发价=${triggerPrice.toFixed(pricePrecision)}, 移动止损价=${trailingStopPrice.toFixed(pricePrecision)}, 保本=${newStopLossBreakeven ? '是' : '否'}`, 'info');
+          addSystemLog(`[${symbol}] 移动止损更新: 触发价=${triggerPrice.toFixed(pricePrecision)}, 移动止损价=${trailingStopPrice.toFixed(pricePrecision)}, 保本=${newStopLossBreakeven ? '是' : '否'}, 最高=${currentHighestPrice.toFixed(pricePrecision)}, 最低=${currentLowestPrice.toFixed(pricePrecision)}`, 'info');
         }
 
         // 检查是否触发移动止损
@@ -1199,11 +1199,12 @@ export default function BinanceAutoTrader() {
 
           return {
             ...p,
-            highestPrice: p.highestPrice || p.entryPrice,
-            lowestPrice: p.lowestPrice || p.entryPrice,
+            // 对于新持仓，最高价/最低价初始化为入场价；对于已有持仓，保留现有值或使用入场价
+            highestPrice: isOpeningNewPosition ? p.entryPrice : (p.highestPrice || p.entryPrice),
+            lowestPrice: isOpeningNewPosition ? p.entryPrice : (p.lowestPrice || p.entryPrice),
             takeProfitExecuted: existingTp || p.takeProfitExecuted || { r1: false, r2: false, r3: false },
             trailingStopPrice: p.trailingStopPrice,
-            stopLossBreakeven: p.stopLossBreakeven || false,
+            stopLossBreakeven: isOpeningNewPosition ? false : (p.stopLossBreakeven || false),
             openTime: existingOpenTime || p.openTime || Date.now(), // 保留已有openTime或使用当前时间
           };
         });
@@ -2347,6 +2348,25 @@ export default function BinanceAutoTrader() {
 
           <div className="mt-6 pt-6 border-t border-gray-700">
             <h3 className="text-lg font-bold mb-4">自动平仓管理</h3>
+
+            {/* 当前模式指示器 */}
+            <div className="mb-4 p-3 rounded-lg" style={{
+              backgroundColor: tradingConfig.useStopTakeProfitOrders ? 'rgba(34, 197, 94, 0.2)' : 'rgba(59, 130, 246, 0.2)'
+            }}>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold" style={{
+                  color: tradingConfig.useStopTakeProfitOrders ? '#22c55e' : '#3b82f6'
+                }}>
+                  当前模式: {tradingConfig.useStopTakeProfitOrders ? '止盈止损订单（自动挂单）' : '客户端监控（分段止盈+移动止损）'}
+                </span>
+              </div>
+              <div className="text-xs text-gray-400 mt-1">
+                {tradingConfig.useStopTakeProfitOrders
+                  ? '开仓时自动在币安服务器挂止盈止损单，无需客户端持续监控。'
+                  : '客户端每2秒监控持仓，执行分段止盈和移动止损逻辑。'}
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -3058,6 +3078,25 @@ export default function BinanceAutoTrader() {
 
           <div className="mt-6 pt-6 border-t border-gray-700">
             <h3 className="text-lg font-bold mb-4">自动平仓管理</h3>
+
+            {/* 当前模式指示器 */}
+            <div className="mb-4 p-3 rounded-lg" style={{
+              backgroundColor: tradingConfig.useStopTakeProfitOrders ? 'rgba(34, 197, 94, 0.2)' : 'rgba(59, 130, 246, 0.2)'
+            }}>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold" style={{
+                  color: tradingConfig.useStopTakeProfitOrders ? '#22c55e' : '#3b82f6'
+                }}>
+                  当前模式: {tradingConfig.useStopTakeProfitOrders ? '止盈止损订单（自动挂单）' : '客户端监控（分段止盈+移动止损）'}
+                </span>
+              </div>
+              <div className="text-xs text-gray-400 mt-1">
+                {tradingConfig.useStopTakeProfitOrders
+                  ? '开仓时自动在币安服务器挂止盈止损单，无需客户端持续监控。'
+                  : '客户端每2秒监控持仓，执行分段止盈和移动止损逻辑。'}
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">
