@@ -1018,33 +1018,6 @@ export default function CryptoBacktestTool() {
     return { data15m, data5m, data1m };
   }
 
-  function runBacktest() {
-    // 根据选择的策略生成不同的数据
-    let data15m, data5m, data1m;
-
-    if (selectedStrategy === "smc_liquidity_fvg") {
-      const generated = generateMockDataSMC();
-      data15m = generated.data15m;
-      data5m = generated.data5m;
-      data1m = generated.data1m;
-    } else {
-      const generated = generateMockData();
-      data15m = generated.data15m;
-      data5m = generated.data5m;
-      data1m = null;
-    }
-
-    setTimeout(() => {
-      try {
-        let trades: Trade[] = [];
-
-        // 根据策略执行不同的回测逻辑
-        if (selectedStrategy === "smc_liquidity_fvg") {
-          trades = runSMCBacktest(data15m, data5m, data1m!);
-        } else {
-          trades = runEMABacktest(data15m, data5m);
-        }
-
   // EMA 策略回测逻辑
   function runEMABacktest(data15m: KLine[], data5m: KLine[]): Trade[] {
     const klineData15m: any[] = data15m.map(k => ({
@@ -1402,6 +1375,34 @@ export default function CryptoBacktestTool() {
 
     return trades;
   }
+
+  // 主回测函数
+  function runBacktest() {
+    // 根据选择的策略生成不同的数据
+    let data15m, data5m, data1m;
+
+    if (selectedStrategy === "smc_liquidity_fvg") {
+      const generated = generateMockDataSMC();
+      data15m = generated.data15m;
+      data5m = generated.data5m;
+      data1m = generated.data1m;
+    } else {
+      const generated = generateMockData();
+      data15m = generated.data15m;
+      data5m = generated.data5m;
+      data1m = null;
+    }
+
+    setTimeout(() => {
+      try {
+        let trades: Trade[] = [];
+
+        // 根据策略执行不同的回测逻辑
+        if (selectedStrategy === "smc_liquidity_fvg") {
+          trades = runSMCBacktest(data15m, data5m, data1m!);
+        } else {
+          trades = runEMABacktest(data15m, data5m);
+        }
 
         // 计算 EMA 指标用于图表显示
         const klineData15m: any[] = data15m.map(k => ({
