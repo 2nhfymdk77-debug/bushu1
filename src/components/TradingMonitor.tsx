@@ -91,6 +91,13 @@ const STRATEGIES = [
     description: "多时间框架策略：使用自定义周期EMA确认趋势方向，在小周期图中寻找回调进场点。结合RSI、成交量、K线颜色等多重过滤条件。",
     icon: "📈",
     params: ["trendTimeframe", "entryTimeframe", "emaShort", "emaLong", "rsiPeriod", "volumePeriod", "stopLossPercent", "stopLossPositionSize", "takeProfitPercent", "takeProfitPositionSize", "leverage", "minTrendDistance"]
+  },
+  {
+    id: "smc_liquidity_fvg",
+    name: "SMC 流动性 + FVG",
+    description: "基于 ICT/SMC 理论的智能资金策略。识别流动性扫荡、确认机构位移，通过 FVG 回踩进行低风险入场。",
+    icon: "💧",
+    params: ["mainTimeframe", "midTimeframe", "lowTimeframe", "liquidityLookback", "liquidityTolerance", "displacementThreshold", "displacementMinBars", "fvgMinSize", "fvgMaxSize", "entryFVGPercent", "stopLossBuffer", "takeProfitTP1", "takeProfitTP2", "riskPercent", "minVolumeRatio", "filterSideways"]
   }
 ];
 

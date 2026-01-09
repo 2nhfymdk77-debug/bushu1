@@ -6,6 +6,7 @@ import {
   KLineData,
 } from "../types/strategy";
 import { EMATrendPullbackStrategy } from "./EMA15mTrend5mPullbackStrategy";
+import { SMCLiquidityFVGStrategy } from "./SMCLiquidityFVGStrategy";
 
 /**
  * 策略管理器（单例）
@@ -35,10 +36,7 @@ export class StrategyManager {
    */
   private registerDefaultStrategies(): void {
     this.register("ema_trend_recognition", new EMATrendPullbackStrategy());
-
-    // 在这里注册其他策略
-    // this.register("rsi_reversal", new RSIReversalStrategy());
-    // this.register("breakout", new BreakoutStrategy());
+    this.register("smc_liquidity_fvg", new SMCLiquidityFVGStrategy());
   }
 
   /**
