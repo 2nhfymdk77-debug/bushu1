@@ -1,7 +1,9 @@
 {
-  "name": "projects",
+  "name": "binance-auto-trader",
   "version": "0.1.0",
   "private": true,
+  "description": "基于 Next.js 和 Electron 的币安期货自动交易工具",
+  "author": "Your Name <your.email@example.com>",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "next dev -p 5000",
@@ -57,6 +59,9 @@
       "out/**/*",
       "package.json"
     ],
+    "extraMetadata": {
+      "description": "基于 Next.js 和 Electron 的币安期货自动交易工具"
+    },
     "win": {
       "target": [
         {
@@ -72,6 +77,17 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    }
+  },
+  "pnpm": {
+    "overrides": {
+      "sharp": "0.34.5"
+    },
+    "peerDependencyRules": {
+      "ignoreMissing": [
+        "@swc/core",
+        "esbuild"
+      ]
     }
   }
 }
