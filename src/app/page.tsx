@@ -368,43 +368,188 @@ function ActivityList({ isMobile }: { isMobile: boolean }) {
   );
 }
 
-// 占位组件（待实现）
+// 导入组件
+import StrategySelector from "@/components/StrategySelector";
+import TradingMonitor from "@/components/TradingMonitor";
+import TradingRecords from "@/components/TradingRecords";
+
+// 策略回测页面
 function BacktestPage({ isMobile }: { isMobile: boolean }) {
+  const [selectedStrategy, setSelectedStrategy] = useState<{
+    id: string;
+    params: any;
+  } | null>(null);
+
+  const handleStrategyChange = (strategyId: string, params: any) => {
+    setSelectedStrategy({ id: strategyId, params });
+  };
+
   return (
-    <div className="bg-gray-800 rounded-xl p-8 text-center">
-      <div className="text-6xl mb-4">🚧</div>
-      <h3 className="text-xl font-bold mb-2">功能开发中</h3>
-      <p className="text-gray-400">策略回测功能正在开发中，敬请期待...</p>
+    <div className="space-y-6">
+      <StrategySelector
+        onStrategyChange={handleStrategyChange}
+        disabled={false}
+      />
+      
+      {selectedStrategy && (
+        <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
+          <h3 className="font-semibold mb-4">回测配置</h3>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-300 mb-2">交易对</label>
+              <input
+                type="text"
+                placeholder="例如: BTCUSDT"
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">开始时间</label>
+                <input
+                  type="date"
+                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">结束时间</label>
+                <input
+                  type="date"
+                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+            <button className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-all">
+              开始回测
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
+// 自动交易页面
 function TradingPage({ isMobile }: { isMobile: boolean }) {
-  return (
-    <div className="bg-gray-800 rounded-xl p-8 text-center">
-      <div className="text-6xl mb-4">🚧</div>
-      <h3 className="text-xl font-bold mb-2">功能开发中</h3>
-      <p className="text-gray-400">自动交易功能正在开发中，敬请期待...</p>
-    </div>
-  );
+  return <TradingMonitor isMobile={isMobile} />;
 }
 
+// 交易记录页面
 function RecordsPage({ isMobile }: { isMobile: boolean }) {
-  return (
-    <div className="bg-gray-800 rounded-xl p-8 text-center">
-      <div className="text-6xl mb-4">🚧</div>
-      <h3 className="text-xl font-bold mb-2">功能开发中</h3>
-      <p className="text-gray-400">交易记录功能正在开发中，敬请期待...</p>
-    </div>
-  );
+  return <TradingRecords isMobile={isMobile} />;
 }
 
+// 系统设置页面
 function SettingsPage({ isMobile }: { isMobile: boolean }) {
+  const [apiKey, setApiKey] = useState("");
+  const [secretKey, setSecretKey] = useState("");
+  const [testNet, setTestNet] = useState(false);
+
+  useEffect(() => {
+    const config = localStorage.getItem("binance_config");
+    if (config) {
+      try {
+        const parsed = JSON.parse(config);
+        setApiKey(parsed.apiKey || "");
+        setSecretKey(parsed.secretKey || "");
+        setTestNet(parsed.testNet || false);
+      } catch (e) {
+        console.error("Failed to parse config:", e);
+      }
+    }
+  }, []);
+
+  const handleSave = () => {
+    const config = { apiKey, secretKey, testNet };
+    localStorage.setItem("binance_config", JSON.stringify(config));
+    alert("配置已保存");
+  };
+
+  const handleTest = async () => {
+    try {
+      const response = await fetch("/api/binance/account");
+      const data = await response.json();
+      if (data.success) {
+        alert("API连接成功！");
+      } else {
+        alert(`API连接失败: ${data.error}`);
+      }
+    } catch (error) {
+      alert(`API连接失败: ${error}`);
+    }
+  };
+
   return (
-    <div className="bg-gray-800 rounded-xl p-8 text-center">
-      <div className="text-6xl mb-4">🚧</div>
-      <h3 className="text-xl font-bold mb-2">功能开发中</h3>
-      <p className="text-gray-400">系统设置功能正在开发中，敬请期待...</p>
+    <div className="space-y-6">
+      <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
+        <h3 className="font-semibold mb-4 flex items-center">
+          <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+          </svg>
+          API密钥配置
+        </h3>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">API Key</label>
+            <input
+              type="text"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="输入币安API Key"
+              className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">Secret Key</label>
+            <input
+              type="password"
+              value={secretKey}
+              onChange={(e) => setSecretKey(e.target.value)}
+              placeholder="输入币安Secret Key"
+              className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div className="flex items-center space-x-3">
+            <input
+              type="checkbox"
+              id="testnet"
+              checked={testNet}
+              onChange={(e) => setTestNet(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-700 bg-gray-900 text-blue-600 focus:ring-blue-500"
+            />
+            <label htmlFor="testnet" className="text-sm text-gray-300">使用测试网络（推荐）</label>
+          </div>
+          <div className="flex space-x-3">
+            <button
+              onClick={handleTest}
+              className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white font-medium rounded-lg transition-all"
+            >
+              测试连接
+            </button>
+            <button
+              onClick={handleSave}
+              className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-all"
+            >
+              保存配置
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-yellow-500/10 rounded-xl p-6 border border-yellow-500/30">
+        <h4 className="font-semibold text-yellow-400 mb-2 flex items-center">
+          <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          安全提示
+        </h4>
+        <ul className="text-sm text-yellow-200 space-y-1 list-disc list-inside">
+          <li>API密钥仅保存在浏览器本地，不会上传到任何服务器</li>
+          <li>建议使用测试网络进行策略测试</li>
+          <li>请勿将API密钥分享给他人</li>
+          <li>建议为API设置IP白名单限制</li>
+        </ul>
+      </div>
     </div>
   );
 }

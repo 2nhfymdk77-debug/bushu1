@@ -4,16 +4,37 @@
  */
 
 // 订单类型
-export type OrderType = "MARKET" | "LIMIT" | "STOP" | "STOP_MARKET" | "TAKE_PROFIT" | "TAKE_PROFIT_MARKET";
+export enum OrderType {
+  MARKET = "MARKET",
+  LIMIT = "LIMIT",
+  STOP = "STOP",
+  STOP_MARKET = "STOP_MARKET",
+  TAKE_PROFIT = "TAKE_PROFIT",
+  TAKE_PROFIT_MARKET = "TAKE_PROFIT_MARKET",
+}
 
 // 订单方向
-export type OrderSide = "BUY" | "SELL";
+export enum OrderSide {
+  BUY = "BUY",
+  SELL = "SELL",
+}
 
 // 仓位方向
-export type PositionSide = "LONG" | "SHORT";
+export enum PositionSide {
+  LONG = "LONG",
+  SHORT = "SHORT",
+}
 
 // 订单状态
-export type OrderStatus = "NEW" | "PARTIALLY_FILLED" | "FILLED" | "CANCELED" | "PENDING_CANCEL" | "REJECTED" | "EXPIRED";
+export enum OrderStatus {
+  NEW = "NEW",
+  PARTIALLY_FILLED = "PARTIALLY_FILLED",
+  FILLED = "FILLED",
+  CANCELED = "CANCELED",
+  PENDING_CANCEL = "PENDING_CANCEL",
+  REJECTED = "REJECTED",
+  EXPIRED = "EXPIRED",
+}
 
 // 持仓信息
 export interface Position {
@@ -29,7 +50,6 @@ export interface Position {
   marginType: "isolated" | "cross";
   isolatedMargin: number;
   isAutoAddMargin: boolean;
-  positionSide: string;
   notional: number;
   isolatedWallet: number;
   updateTime: number;

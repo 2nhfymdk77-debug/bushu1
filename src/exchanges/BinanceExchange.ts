@@ -576,25 +576,29 @@ export class BinanceExchange implements Exchange {
     interval: string,
     callback: (data: any) => void
   ): Promise<() => void> {
-    const stream = `${symbol.toLowerCase()}@kline_${interval}`;
-    const ws = new WebSocket(`${WS_BASE_URL}/${stream}`);
+    return new Promise((resolve) => {
+      const stream = `${symbol.toLowerCase()}@kline_${interval}`;
+      const ws = new WebSocket(`${WS_BASE_URL}/${stream}`);
 
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      callback(data);
-    };
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        callback(data);
+      };
 
-    ws.onerror = (error) => {
-      console.error(`WebSocket error for ${stream}:`, error);
-    };
+      ws.onerror = (error) => {
+        console.error(`WebSocket error for ${stream}:`, error);
+      };
 
-    this.wsConnections.set(stream, ws);
+      this.wsConnections.set(stream, ws);
 
-    // 返回取消订阅函数
-    return () => {
-      ws.close();
-      this.wsConnections.delete(stream);
-    };
+      // 返回取消订阅函数
+      const unsubscribe = () => {
+        ws.close();
+        this.wsConnections.delete(stream);
+      };
+
+      resolve(unsubscribe);
+    });
   }
 
   /**
@@ -603,25 +607,29 @@ export class BinanceExchange implements Exchange {
   subscribeAccountUpdate(
     callback: (data: any) => void
   ): Promise<() => void> {
-    const listenKey = this.getListenKey();
-    const ws = new WebSocket(`${WS_BASE_URL}/${listenKey}`);
+    return new Promise((resolve) => {
+      const listenKey = this.getListenKey();
+      const ws = new WebSocket(`${WS_BASE_URL}/${listenKey}`);
 
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      callback(data);
-    };
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        callback(data);
+      };
 
-    ws.onerror = (error) => {
-      console.error(`WebSocket error for account updates:`, error);
-    };
+      ws.onerror = (error) => {
+        console.error(`WebSocket error for account updates:`, error);
+      };
 
-    this.wsConnections.set("account", ws);
+      this.wsConnections.set("account", ws);
 
-    // 返回取消订阅函数
-    return () => {
-      ws.close();
-      this.wsConnections.delete("account");
-    };
+      // 返回取消订阅函数
+      const unsubscribe = () => {
+        ws.close();
+        this.wsConnections.delete("account");
+      };
+
+      resolve(unsubscribe);
+    });
   }
 
   /**

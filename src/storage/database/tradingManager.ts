@@ -24,11 +24,18 @@ import type {
   ManualIntervention,
   TradingLog,
   SystemStat,
+  InsertUserConfig,
+  InsertTradeTask,
+  InsertSignalExecutionRecord,
+  InsertBacktestResult,
+  InsertManualIntervention,
+  InsertTradingLog,
+  InsertSystemStat,
 } from "./shared/schema";
 
 // 用户配置管理器
 export class UserConfigManager {
-  async createConfig(data: typeof insertUserConfigSchema._type): Promise<UserConfig> {
+  async createConfig(data: InsertUserConfig): Promise<UserConfig> {
     const db = await getDb();
     const validated = insertUserConfigSchema.parse(data);
     const [config] = await db.insert(userConfigs).values(validated).returning();
@@ -63,7 +70,7 @@ export class UserConfigManager {
 
 // 交易任务管理器
 export class TradeTaskManager {
-  async createTask(data: typeof insertTradeTaskSchema._type): Promise<TradeTask> {
+  async createTask(data: InsertTradeTask): Promise<TradeTask> {
     const db = await getDb();
     const validated = insertTradeTaskSchema.parse(data);
     const [task] = await db.insert(tradeTasks).values(validated).returning();
@@ -117,9 +124,22 @@ export class TradeTaskManager {
     }
   ): Promise<TradeTask | null> {
     const db = await getDb();
+    const updateData: any = { ...stats, updatedAt: new Date() };
+
+    // 将数值转换为字符串（因为数据库中是numeric类型）
+    if (stats.totalProfit !== undefined) {
+      updateData.totalProfit = stats.totalProfit.toString();
+    }
+    if (stats.netProfit !== undefined) {
+      updateData.netProfit = stats.netProfit.toString();
+    }
+    if (stats.winRate !== undefined) {
+      updateData.winRate = stats.winRate.toString();
+    }
+
     const [task] = await db
       .update(tradeTasks)
-      .set({ ...stats, updatedAt: new Date() })
+      .set(updateData)
       .where(eq(tradeTasks.id, id))
       .returning();
     return task || null;
@@ -128,7 +148,7 @@ export class TradeTaskManager {
 
 // 信号执行记录管理器
 export class SignalExecutionManager {
-  async createRecord(data: typeof insertSignalExecutionRecordSchema._type): Promise<SignalExecutionRecord> {
+  async createRecord(data: InsertSignalExecutionRecord): Promise<SignalExecutionRecord> {
     const db = await getDb();
     const validated = insertSignalExecutionRecordSchema.parse(data);
     const [record] = await db.insert(signalExecutionRecords).values(validated).returning();
@@ -229,7 +249,7 @@ export class SignalExecutionManager {
 
 // 回测结果管理器
 export class BacktestResultManager {
-  async createResult(data: typeof insertBacktestResultSchema._type): Promise<BacktestResult> {
+  async createResult(data: InsertBacktestResult): Promise<BacktestResult> {
     const db = await getDb();
     const validated = insertBacktestResultSchema.parse(data);
     const [result] = await db.insert(backtestResults).values(validated).returning();
@@ -279,7 +299,7 @@ export class BacktestResultManager {
 
 // 手动干预记录管理器
 export class ManualInterventionManager {
-  async createRecord(data: typeof insertManualInterventionSchema._type): Promise<ManualIntervention> {
+  async createRecord(data: InsertManualIntervention): Promise<ManualIntervention> {
     const db = await getDb();
     const validated = insertManualInterventionSchema.parse(data);
     const [record] = await db.insert(manualInterventions).values(validated).returning();
@@ -317,7 +337,7 @@ export class ManualInterventionManager {
 
 // 交易日志管理器
 export class TradingLogManager {
-  async createLog(data: typeof insertTradingLogSchema._type): Promise<TradingLog> {
+  async createLog(data: InsertTradingLog): Promise<TradingLog> {
     const db = await getDb();
     const validated = insertTradingLogSchema.parse(data);
     const [log] = await db.insert(tradingLogs).values(validated).returning();
@@ -369,7 +389,7 @@ export class TradingLogManager {
 
 // 系统统计管理器
 export class SystemStatsManager {
-  async createStat(data: typeof insertSystemStatSchema._type): Promise<SystemStat> {
+  async createStat(data: InsertSystemStat): Promise<SystemStat> {
     const db = await getDb();
     const validated = insertSystemStatSchema.parse(data);
     const [stat] = await db.insert(systemStats).values(validated).returning();

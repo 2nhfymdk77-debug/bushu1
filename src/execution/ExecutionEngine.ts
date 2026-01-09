@@ -402,18 +402,21 @@ export class BinanceExecutionEngine implements ExecutionEngine {
       const order = await this.config.exchange.placeOrder(orderParams);
 
       // 创建执行记录
+      // 计算平均成交价（使用cumQuote/executedQty）
+      const avgPrice = order.executedQty > 0 ? order.cumQuote / order.executedQty : order.price;
+
       const record: SignalExecutionRecord = {
         id: `exec_${Date.now()}_${Math.random()}`,
         taskId: runtime.task.id,
         signal: signal,
         executed: true,
         executionTime: Date.now(),
-        orderId: order.orderId,
-        signalPrice: signal.entryPrice,
-        executionPrice: order.avgPrice || parseFloat(order.price),
-        slippage: Math.abs((order.avgPrice || parseFloat(order.price)) - signal.entryPrice),
-        quantity: parseFloat(order.executedQty),
-        positionValue: parseFloat(order.executedQty) * parseFloat(order.price),
+        orderId: order.orderId.toString(),
+        signalPrice: signal.entryPrice.toString(),
+        executionPrice: avgPrice.toString(),
+        slippage: Math.abs(avgPrice - signal.entryPrice),
+        quantity: order.executedQty.toString(),
+        positionValue: (order.executedQty * order.price).toString(),
         timestamp: Date.now(),
       };
 
@@ -432,9 +435,9 @@ export class BinanceExecutionEngine implements ExecutionEngine {
         taskId: runtime.task.id,
         signal: signal,
         executed: false,
-        signalPrice: signal.entryPrice,
-        quantity: 0,
-        positionValue: 0,
+        signalPrice: signal.entryPrice.toString(),
+        quantity: "0",
+        positionValue: "0",
         error: error.message,
         timestamp: Date.now(),
       };

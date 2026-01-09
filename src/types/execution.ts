@@ -112,17 +112,17 @@ export interface SignalExecutionRecord {
   // 执行结果
   executed: boolean;
   executionTime?: number;
-  orderId?: number;
+  orderId?: string;
   error?: string;
 
   // 价格
-  signalPrice: number;
-  executionPrice?: number;
+  signalPrice: string;
+  executionPrice?: string;
   slippage?: number;
 
   // 数量
-  quantity: number;
-  positionValue: number;
+  quantity: string;
+  positionValue: string;
 
   // 时间戳
   timestamp: number;
