@@ -185,9 +185,9 @@ interface TradingConfig {
 }
 
 const DEFAULT_TRADING_CONFIG: TradingConfig = {
-  positionSizePercent: 10,
+  positionSizePercent: 25,  // 优化：从10%提高到25%，更充分利用资金
   maxOpenPositions: 3,
-  stopLossPercent: 0.5,
+  stopLossPercent: 0.5,     // 优化：从0.5%保持不变（止损比例）
   takeProfitPercent: 1.0,
   maxDailyLoss: 5,
   dailyTradesLimit: 10,
