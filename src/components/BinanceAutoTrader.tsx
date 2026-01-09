@@ -241,12 +241,12 @@ export default function BinanceAutoTrader() {
   const [customIntervalMinutes, setCustomIntervalMinutes] = useState(5); // 自定义间隔时间（分钟）
   const [contractPool, setContractPool] = useState<string[]>([]); // 合约池（高成交量合约列表）
   const [closeMode, setCloseMode] = useState<'stopTakeProfit' | 'partialTrailing' | 'simple'>('stopTakeProfit'); // 平仓模式选择
-  const [currentBatchIndex, setCurrentBatchIndex] = useState(0); // 当前扫描批次索引
   const [showAdvancedParams, setShowAdvancedParams] = useState(false); // 显示高级参数
 
   const wsRef = useRef<WebSocket | null>(null);
   const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const emaCacheRef = useRef<Map<string, { short: number[]; long: number[]; volMA: number[] }>>(new Map());
+  const currentBatchRef = useRef(0); // 当前扫描批次索引（使用ref避免闭包问题）
 
   // 统一的日志记录函数
   const addSystemLog = (msg: string, type: 'info' | 'success' | 'error' | 'warning' = 'info') => {
@@ -366,13 +366,14 @@ export default function BinanceAutoTrader() {
       // 如果合约池更新了，重置批次索引
       if (JSON.stringify(newContractPool) !== JSON.stringify(contractPool)) {
         setContractPool(newContractPool);
-        setCurrentBatchIndex(0);
+        currentBatchRef.current = 0;
         addLog(`📊 更新合约池: ${newContractPool.length} 个高成交量合约`);
       }
 
       // 轮询机制：每次扫描选择不同的批次（每批10个合约）
       const batchSize = 10;
       const totalBatches = Math.ceil(newContractPool.length / batchSize);
+      const currentBatchIndex = currentBatchRef.current;
       const startIndex = (currentBatchIndex * batchSize) % newContractPool.length;
       const endIndex = Math.min(startIndex + batchSize, newContractPool.length);
       const currentBatch = newContractPool.slice(startIndex, endIndex);
@@ -380,7 +381,7 @@ export default function BinanceAutoTrader() {
       addLog(`📊 批次 ${currentBatchIndex + 1}/${totalBatches}: ${currentBatch.length} 个合约 ${currentBatch.join(', ')}`);
 
       // 更新批次索引（下次扫描切换到下一批）
-      setCurrentBatchIndex((prev) => (prev + 1) % totalBatches);
+      currentBatchRef.current = (currentBatchRef.current + 1) % totalBatches;
 
       setScanProgress(`正在扫描批次 ${currentBatchIndex + 1}/${totalBatches}...`);
 
