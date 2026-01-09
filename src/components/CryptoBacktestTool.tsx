@@ -1378,6 +1378,9 @@ export default function CryptoBacktestTool() {
 
   // 主回测函数
   function runBacktest() {
+    setIsLoading(true);
+    setResult(null);
+
     // 根据选择的策略生成不同的数据
     let data15m, data5m, data1m;
 
