@@ -86,9 +86,6 @@ interface Position {
   unRealizedProfit: number;
   leverage: number;
   notional: number;
-  // 盈亏平衡相关
-  breakevenPrice?: number;      // 盈亏平衡时的止损价格（成本价）
-  breakevenTriggered?: boolean; // 是否已触发盈亏平衡
   openTime?: number;             // 开仓时间
 }
 
@@ -158,12 +155,8 @@ interface TradingConfig {
   maxOpenPositions: number;
   stopLossPercent: number;
   takeProfitPercent: number;
-  breakevenPercent: number;  // 盈亏平衡点（达到此盈利后止损移到成本价）
   maxDailyLoss: number;
   dailyTradesLimit: number;
-  // 自动平仓配置（简化版）
-  autoStopLoss: boolean;
-  autoTakeProfit: boolean;
   // 扫描配置
   scanIntervalMinutes: number;   // 自动扫描间隔时间（分钟）
 }
@@ -173,12 +166,8 @@ const DEFAULT_TRADING_CONFIG: TradingConfig = {
   maxOpenPositions: 6,         // 最多6个持仓
   stopLossPercent: 0.5,        // 止损0.5%
   takeProfitPercent: 1.0,      // 止盈1.0%
-  breakevenPercent: 0.5,       // 盈利0.5%时止损移到成本价
   maxDailyLoss: 5,
   dailyTradesLimit: 10,
-  // 自动止损止盈
-  autoStopLoss: true,
-  autoTakeProfit: true,
   // 扫描配置
   scanIntervalMinutes: 5,     // 默认每5分钟扫描一次
 };
@@ -211,7 +200,6 @@ export default function BinanceAutoTrader() {
   const [systemLog, setSystemLog] = useState<string[]>([]); // 系统日志（交易、WebSocket、系统事件）
   const [customIntervalMinutes, setCustomIntervalMinutes] = useState(5); // 自定义间隔时间（分钟）
   const [contractPool, setContractPool] = useState<string[]>([]); // 合约池（高成交量合约列表）
-  const [closeMode, setCloseMode] = useState<'simple'>('simple');
   const [showAdvancedParams, setShowAdvancedParams] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -583,183 +571,48 @@ export default function BinanceAutoTrader() {
       const isLong = position.positionAmt > 0;
       const currentPrice = position.markPrice;
       const entryPrice = position.entryPrice;
-      const pnl = position.unRealizedProfit;
 
       // 获取交易对精度信息
       const symbolInfo = symbols.find(s => s.symbol === symbol);
       const pricePrecision = symbolInfo?.pricePrecision || 2;
 
-      // 基础止损价格
+      // 止损价格
       const stopLossPrice = isLong
         ? entryPrice * (1 - tradingConfig.stopLossPercent / 100)
         : entryPrice * (1 + tradingConfig.stopLossPercent / 100);
 
-      // 实际止损价格（可能已移到成本价）
-      const currentStopLossPrice = position.breakevenPrice || stopLossPrice;
+      // 止盈价格
+      const takeProfitPrice = isLong
+        ? entryPrice * (1 + tradingConfig.takeProfitPercent / 100)
+        : entryPrice * (1 - tradingConfig.takeProfitPercent / 100);
 
       // 1. 自动止盈
-      if (tradingConfig.autoTakeProfit) {
-        const takeProfitPrice = isLong
-          ? entryPrice * (1 + tradingConfig.takeProfitPercent / 100)
-          : entryPrice * (1 - tradingConfig.takeProfitPercent / 100);
+      const hitTakeProfit = isLong
+        ? currentPrice >= takeProfitPrice
+        : currentPrice <= takeProfitPrice;
 
-        const hitTakeProfit = isLong
-          ? currentPrice >= takeProfitPrice
-          : currentPrice <= takeProfitPrice;
-
-        if (hitTakeProfit) {
-          console.log(`触发达盈: ${symbol} 价格: ${currentPrice.toFixed(2)} 止盈价: ${takeProfitPrice.toFixed(2)}`);
-          addSystemLog(`[${symbol}] 止盈触发: 价格 ${currentPrice.toFixed(pricePrecision)} >= 目标 ${takeProfitPrice.toFixed(pricePrecision)}`, 'success');
-          await executeAutoClose(position, "止盈触发");
-          continue;
-        }
+      if (hitTakeProfit) {
+        console.log(`触发达盈: ${symbol} 价格: ${currentPrice.toFixed(2)} 止盈价: ${takeProfitPrice.toFixed(2)}`);
+        addSystemLog(`[${symbol}] 止盈触发: 价格 ${currentPrice.toFixed(pricePrecision)} >= 目标 ${takeProfitPrice.toFixed(pricePrecision)}`, 'success');
+        await executeAutoClose(position, "止盈触发");
+        continue;
       }
 
-      // 2. 盈亏平衡（达到盈利后止损移到成本价）
-      const breakevenPrice = isLong
-        ? entryPrice * (1 + tradingConfig.breakevenPercent / 100)
-        : entryPrice * (1 - tradingConfig.breakevenPercent / 100);
+      // 2. 自动止损
+      const hitStopLoss = isLong
+        ? currentPrice <= stopLossPrice
+        : currentPrice >= stopLossPrice;
 
-      const hitBreakeven = isLong
-        ? currentPrice >= breakevenPrice
-        : currentPrice <= breakevenPrice;
-
-      if (hitBreakeven && !position.breakevenTriggered) {
-        // 将止损移到成本价
-        setPositions(prevPositions =>
-          prevPositions.map(p => {
-            if (p.symbol === symbol && p.positionSide === position.positionSide) {
-              return {
-                ...p,
-                breakevenPrice: entryPrice,
-                breakevenTriggered: true
-              };
-            }
-            return p;
-          })
-        );
-        addSystemLog(`[${symbol}] 盈亏平衡: 价格 ${currentPrice.toFixed(pricePrecision)} >= 盈利目标 ${breakevenPrice.toFixed(pricePrecision)}, 止损移至成本价 ${entryPrice.toFixed(pricePrecision)}`, 'info');
-      }
-
-      // 3. 自动止损
-      if (tradingConfig.autoStopLoss) {
-        const hitStopLoss = isLong
-          ? currentPrice <= currentStopLossPrice
-          : currentPrice >= currentStopLossPrice;
-
-        if (hitStopLoss) {
-          const reason = position.breakevenTriggered ? "盈亏平衡后止损" : "止损触发";
-          console.log(`${reason}: ${symbol} 价格: ${currentPrice.toFixed(2)} 止损价: ${currentStopLossPrice.toFixed(2)}`);
-          addSystemLog(`[${symbol}] ${reason}: 价格 ${currentPrice.toFixed(pricePrecision)} <= 止损 ${currentStopLossPrice.toFixed(pricePrecision)}`, position.breakevenTriggered ? 'success' : 'error');
-          await executeAutoClose(position, reason);
-          continue;
-        }
+      if (hitStopLoss) {
+        console.log(`止损触发: ${symbol} 价格: ${currentPrice.toFixed(2)} 止损价: ${stopLossPrice.toFixed(2)}`);
+        addSystemLog(`[${symbol}] 止损触发: 价格 ${currentPrice.toFixed(pricePrecision)} <= 止损 ${stopLossPrice.toFixed(pricePrecision)}`, 'error');
+        await executeAutoClose(position, "止损触发");
+        continue;
       }
     }
   };
 
   // 执行部分平仓
-  const executePartialClose = async (position: Position, percent: number, reason: string) => {
-    if (!connected || !apiKey || !apiSecret) return;
-
-    try {
-      const isLong = position.positionAmt > 0;
-      const side = isLong ? "SELL" : "BUY";
-      const totalQuantity = Math.abs(position.positionAmt);
-      const closeQuantity = totalQuantity * percent;
-
-      // 获取交易对精度信息
-      const symbolInfo = symbols.find(s => s.symbol === position.symbol);
-      const quantityPrecision = symbolInfo?.quantityPrecision ?? 3;
-
-      // 格式化数量
-      const formattedQuantity = parseFloat(closeQuantity.toFixed(quantityPrecision));
-
-      // 平仓时positionSide必须与持仓方向一致
-      const closePositionSide = position.positionSide || (isLong ? "LONG" : "SHORT");
-
-      // 真实平仓
-      const response = await fetch("/api/binance/order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          apiKey,
-          apiSecret,
-          symbol: position.symbol,
-          side,
-          type: "MARKET",
-          quantity: formattedQuantity,
-          positionSide: closePositionSide,
-        }),
-      });
-
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(result.error || "平仓失败");
-      }
-
-      // 记录平仓交易
-      const closeTrade: TradeRecord = {
-        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        symbol: position.symbol,
-        side,
-        type: "MARKET",
-        quantity: formattedQuantity,
-        price: position.markPrice,
-        time: Date.now(),
-        status: "FILLED",
-      };
-
-      setTradeRecords((prev) => [closeTrade, ...prev.slice(0, 99)]);
-
-      // 创建部分平仓的交易记录
-      const partialPnl = position.unRealizedProfit * percent;
-      const completedTrade: CompletedTrade = {
-        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        symbol: position.symbol,
-        positionSide: position.positionSide,
-        openTime: position.openTime || Date.now() - 3600000,
-        closeTime: Date.now(),
-        entryPrice: position.entryPrice,
-        exitPrice: position.markPrice,
-        quantity: formattedQuantity,
-        leverage: position.leverage,
-        pnl: partialPnl,
-        pnlPercent: partialPnl / (Math.abs(position.notional) * percent) * 100,
-        closeReason: reason,
-        direction: position.positionSide === 'LONG' ? 'long' : 'short',
-        notional: position.notional * percent,
-      };
-
-      setCompletedTrades((prev) => [completedTrade, ...prev.slice(0, 199)]);
-
-      // 更新持仓数量
-      setPositions((prev) =>
-        prev.map((p) => {
-          if (p.symbol === position.symbol && p.positionSide === position.positionSide) {
-            const newAmt = isLong
-              ? p.positionAmt - closeQuantity
-              : p.positionAmt + closeQuantity;
-
-            return {
-              ...p,
-              positionAmt: newAmt,
-            };
-          }
-          return p;
-        })
-      );
-
-      console.log(`部分平仓成功: ${position.symbol} 比例: ${(percent * 100).toFixed(0)}% 原因: ${reason} 盈亏: ${(position.unRealizedProfit * percent).toFixed(2)} USDT`);
-
-      // 立即刷新持仓信息，确保状态同步
-      await fetchAccountInfo(false);
-    } catch (err: any) {
-      console.error(`部分平仓失败: ${position.symbol}`, err);
-      setError(`部分平仓失败: ${err.message}`);
-    }
-  };
-
   // 执行自动平仓
   const executeAutoClose = async (position: Position, reason: string) => {
     if (!connected || !apiKey || !apiSecret) return;
@@ -1035,17 +888,9 @@ export default function BinanceAutoTrader() {
         // 保存旧的持仓，用于检测被平掉的持仓
         const oldPositions = positions;
 
-        // 保留现有的 breakevenPrice 和 openTime 状态
-        const existingBreakevenPrices = new Map<string, number>();
-        const existingBreakevenTriggered = new Map<string, boolean>();
+        // 保留现有的 openTime 状态
         const existingOpenTimes = new Map<string, number>();
         positions.forEach(p => {
-          if (p.breakevenPrice && p.positionAmt !== 0) {
-            existingBreakevenPrices.set(`${p.symbol}_${p.positionSide}`, p.breakevenPrice);
-          }
-          if (p.breakevenTriggered !== undefined && p.positionAmt !== 0) {
-            existingBreakevenTriggered.set(`${p.symbol}_${p.positionSide}`, p.breakevenTriggered);
-          }
           if (p.openTime && p.positionAmt !== 0) {
             existingOpenTimes.set(`${p.symbol}_${p.positionSide}`, p.openTime);
           }
@@ -1054,8 +899,6 @@ export default function BinanceAutoTrader() {
         // 初始化新增字段
         const initializedPositions = positionsData.map((p: Position) => {
           const key = `${p.symbol}_${p.positionSide}`;
-          const existingBreakevenPrice = existingBreakevenPrices.get(key);
-          const existingTriggered = existingBreakevenTriggered.get(key);
           const existingOpenTime = existingOpenTimes.get(key);
 
           // 如果是新持仓（没有记录过openTime），设置当前时间为开仓时间
@@ -1063,8 +906,6 @@ export default function BinanceAutoTrader() {
 
           return {
             ...p,
-            breakevenPrice: existingBreakevenPrice,
-            breakevenTriggered: existingTriggered || false,
             openTime: existingOpenTime || p.openTime || Date.now(),
           };
         });
@@ -2010,201 +1851,115 @@ export default function BinanceAutoTrader() {
           </div>
 
           <div className="mt-6 pt-6 border-t border-gray-700">
-            <h3 className="text-lg font-bold mb-4">自动平仓管理</h3>
+            <h3 className="text-lg font-bold mb-4">平仓参数设置</h3>
 
-            {/* 平仓模式选择器 */}
-            <div className="mb-6">
-              <div className="flex gap-2 mb-4">
-                <button
-                  onClick={() => setCloseMode('stopTakeProfit')}
-                  className={`flex-1 py-3 px-4 rounded-lg transition ${
-                    closeMode === 'stopTakeProfit'
-                      ? 'bg-green-600 text-white'
-                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                  }`}
-                >
-                  <div className="font-semibold">止盈止损订单</div>
-                  <div className="text-xs opacity-80">推荐模式</div>
-                </button>
-                <button
-                  onClick={() => setCloseMode('partialTrailing')}
-                  className={`flex-1 py-3 px-4 rounded-lg transition ${
-                    closeMode === 'partialTrailing'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                  }`}
-                >
-                  <div className="font-semibold">分段止盈+移动止损</div>
-                  <div className="text-xs opacity-80">高级模式</div>
-                </button>
-                <button
-                  onClick={() => setCloseMode('simple')}
-                  className={`flex-1 py-3 px-4 rounded-lg transition ${
-                    closeMode === 'simple'
-                      ? 'bg-yellow-600 text-white'
-                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                  }`}
-                >
-                  <div className="font-semibold">简单止盈</div>
-                  <div className="text-xs opacity-80">基础模式</div>
-                </button>
-              </div>
-
-              {/* 模式说明 */}
-              <div className="p-4 bg-gray-700/50 rounded-lg">
-                {closeMode === 'stopTakeProfit' && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-lg">✅</span>
-                      <span className="font-semibold text-green-400">止盈止损订单模式（推荐）</span>
-                    </div>
-                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside">
-                      <li>开仓时自动在币安服务器挂止盈止损单</li>
-                      <li>无需客户端持续监控，断网也不影响</li>
-                      <li>止盈止损单自动执行，无需等待</li>
-                      <li>支持止损和止盈同时设置</li>
-                      <li>适合高频交易和需要及时止盈止损的场景</li>
-                    </ul>
-                  </div>
-                )}
-                {closeMode === 'partialTrailing' && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-lg">🎯</span>
-                      <span className="font-semibold text-blue-400">分段止盈+移动止损模式（高级）</span>
-                    </div>
-                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside mb-4">
-                      <li><strong>分段止盈</strong>：可自定义1R、2R、3R倍数和止盈比例</li>
-                      <li><strong>移动止损</strong>：达到1R后止损移到保本价</li>
-                      <li>客户端每2秒监控持仓状态</li>
-                      <li>需要保持网络连接和页面打开</li>
-                      <li>适合有经验的交易者，优化盈亏比</li>
-                    </ul>
-                    {/* 分段止盈配置 */}
-                    <div className="mt-4 p-4 bg-gray-800 rounded-lg">
-                      <div className="text-xs font-semibold text-gray-400 mb-3">分段止盈配置</div>
-                      <div className="grid grid-cols-3 gap-4">
-                        <div>
-                          <label className="block text-xs text-gray-400 mb-1">
-                            1R止盈比例
-                            <span className="text-xs text-gray-500 ml-1">(%)</span>
-                          </label>
-                          <input
-                            type="number"
-                            step="10"
-                            min="0"
-                            max="100"
-                            value={tradingConfig.partialTakeProfitR1}
-                            onChange={(e) =>
-                              setTradingConfig({ ...tradingConfig, partialTakeProfitR1: Math.min(100, Math.max(0, Number(e.target.value))) })
-                            }
-                            className="w-full bg-gray-700 rounded px-2 py-1 text-white text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-400 mb-1">
-                            2R止盈比例
-                            <span className="text-xs text-gray-500 ml-1">(%)</span>
-                          </label>
-                          <input
-                            type="number"
-                            step="10"
-                            min="0"
-                            max="100"
-                            value={tradingConfig.partialTakeProfitR2}
-                            onChange={(e) =>
-                              setTradingConfig({ ...tradingConfig, partialTakeProfitR2: Math.min(100, Math.max(0, Number(e.target.value))) })
-                            }
-                            className="w-full bg-gray-700 rounded px-2 py-1 text-white text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-400 mb-1">
-                            3R止盈比例
-                            <span className="text-xs text-gray-500 ml-1">(%)</span>
-                          </label>
-                          <input
-                            type="number"
-                            step="10"
-                            min="0"
-                            max="100"
-                            value={tradingConfig.partialTakeProfitR3}
-                            onChange={(e) =>
-                              setTradingConfig({ ...tradingConfig, partialTakeProfitR3: Math.min(100, Math.max(0, Number(e.target.value))) })
-                            }
-                            className="w-full bg-gray-700 rounded px-2 py-1 text-white text-sm"
-                          />
-                        </div>
-                      </div>
-                      <div className="text-xs text-gray-500 mt-2">
-                        说明：1R价格=止损距离×{strategyParams.riskRewardMultiplier1}倍，2R=×{strategyParams.riskRewardMultiplier2}倍，3R=×{strategyParams.riskRewardMultiplier3}倍
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {closeMode === 'simple' && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-lg">📊</span>
-                      <span className="font-semibold text-yellow-400">简单止盈模式（基础）</span>
-                    </div>
-                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside">
-                      <li>单次止盈：达到止盈位全部平仓</li>
-                      <li>自动止损：达到止损位全部平仓</li>
-                      <li>客户端每2秒监控持仓状态</li>
-                      <li>逻辑简单，适合新手使用</li>
-                      <li>盈亏比较固定，无需复杂计算</li>
-                    </ul>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* 通用选项 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* 止损设置 */}
+              <div className="bg-gray-700/30 rounded-lg p-4">
+                <label className="block text-sm text-gray-400 mb-2">止损比例 (%)</label>
+                <div className="flex items-center gap-3">
                   <input
-                    type="checkbox"
-                    checked={tradingConfig.autoStopLoss}
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="10"
+                    value={tradingConfig.stopLossPercent}
                     onChange={(e) =>
-                      setTradingConfig({ ...tradingConfig, autoStopLoss: e.target.checked })
+                      setTradingConfig({ ...tradingConfig, stopLossPercent: Math.min(10, Math.max(0.1, Number(e.target.value))) })
                     }
-                    className="w-4 h-4"
+                    className="flex-1 bg-gray-700 rounded px-3 py-2 text-white text-lg font-semibold"
                   />
-                  <span className="text-sm text-gray-300">自动止损</span>
-                </label>
-                <div className="text-xs text-gray-500 mt-1">
-                  价格达到止损位时自动平仓（所有模式通用）
+                  <span className="text-gray-400">%</span>
+                </div>
+                <div className="text-xs text-gray-500 mt-2">
+                  价格低于/高于入场价 {tradingConfig.stopLossPercent}% 时触发止损
                 </div>
               </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
+
+              {/* 止盈设置 */}
+              <div className="bg-gray-700/30 rounded-lg p-4">
+                <label className="block text-sm text-gray-400 mb-2">止盈比例 (%)</label>
+                <div className="flex items-center gap-3">
                   <input
-                    type="checkbox"
-                    checked={tradingConfig.reverseSignalClose}
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="20"
+                    value={tradingConfig.takeProfitPercent}
                     onChange={(e) =>
-                      setTradingConfig({ ...tradingConfig, reverseSignalClose: e.target.checked })
+                      setTradingConfig({ ...tradingConfig, takeProfitPercent: Math.min(20, Math.max(0.1, Number(e.target.value))) })
                     }
-                    className="w-4 h-4"
+                    className="flex-1 bg-gray-700 rounded px-3 py-2 text-white text-lg font-semibold"
                   />
-                  <span className="text-sm text-gray-300">反向信号平仓</span>
-                </label>
-                <div className="text-xs text-gray-500 mt-1">
-                  出现反向信号时自动平仓（所有模式通用）
+                  <span className="text-gray-400">%</span>
+                </div>
+                <div className="text-xs text-gray-500 mt-2">
+                  价格高于/低于入场价 {tradingConfig.takeProfitPercent}% 时触发止盈
                 </div>
               </div>
             </div>
 
-            <div className="mt-4 p-4 bg-blue-900/20 rounded">
-              <h4 className="font-bold text-blue-400 mb-2">平仓策略说明</h4>
-              <ul className="text-xs text-gray-300 space-y-1 list-disc list-inside">
-                <li><span className="text-green-400">分段止盈</span>: 1R平50%仓位，2R平剩余50%仓位，保护已实现的利润</li>
-                <li><span className="text-green-400">移动止损</span>: 达到1R后，止损价随价格移动，锁定更多利润</li>
-                <li><span className="text-green-400">移动到保本价</span>: 达到1R后，止损移动到入场价，确保不亏损</li>
-                <li><span className="text-yellow-400">R值说明</span>: 1R = 止损距离（如止损0.5%，1R = 价格移动0.5%）</li>
-                <li>每5秒自动检查持仓，触发条件立即执行平仓</li>
-                <li>分段止盈和简单止盈互斥，建议使用分段止盈</li>
+            {/* 价格预览表格 */}
+            {positions.length > 0 && (
+              <div className="mt-4 p-4 bg-gray-700/20 rounded-lg">
+                <h4 className="text-sm font-semibold text-gray-400 mb-3">盈亏价格预览（基于当前持仓）</h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="border-b border-gray-600">
+                      <tr>
+                        <th className="py-2 text-left text-gray-400">合约</th>
+                        <th className="py-2 text-left text-gray-400">方向</th>
+                        <th className="py-2 text-right text-gray-400">入场价</th>
+                        <th className="py-2 text-right text-gray-400">止损价</th>
+                        <th className="py-2 text-right text-gray-400">止盈价</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {positions.slice(0, 5).map((pos, index) => {
+                        const isLong = pos.positionAmt > 0;
+                        const stopLossPrice = isLong
+                          ? pos.entryPrice * (1 - tradingConfig.stopLossPercent / 100)
+                          : pos.entryPrice * (1 + tradingConfig.stopLossPercent / 100);
+                        const takeProfitPrice = isLong
+                          ? pos.entryPrice * (1 + tradingConfig.takeProfitPercent / 100)
+                          : pos.entryPrice * (1 - tradingConfig.takeProfitPercent / 100);
+                        const symbolInfo = symbols.find(s => s.symbol === pos.symbol);
+                        const pricePrecision = symbolInfo?.pricePrecision ?? 2;
+
+                        return (
+                          <tr key={index} className="border-b border-gray-700/50">
+                            <td className="py-2">{pos.symbol}</td>
+                            <td className="py-2">
+                              <span className={`px-1.5 py-0.5 rounded text-xs ${isLong ? 'bg-green-600/20 text-green-400' : 'bg-red-600/20 text-red-400'}`}>
+                                {isLong ? '做多' : '做空'}
+                              </span>
+                            </td>
+                            <td className="py-2 text-right">{pos.entryPrice.toFixed(pricePrecision)}</td>
+                            <td className="py-2 text-right text-red-400">{stopLossPrice.toFixed(pricePrecision)}</td>
+                            <td className="py-2 text-right text-green-400">{takeProfitPrice.toFixed(pricePrecision)}</td>
+                          </tr>
+                        );
+                      })}
+                      {positions.length > 5 && (
+                        <tr>
+                          <td colSpan={5} className="py-2 text-center text-gray-500">
+                            还有 {positions.length - 5} 个持仓未显示...
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 p-4 bg-gray-700/20 rounded-lg">
+              <h4 className="text-sm font-semibold text-gray-400 mb-2">平仓策略说明</h4>
+              <ul className="text-xs text-gray-500 space-y-1 list-disc list-inside">
+                <li><span className="text-red-400">自动止损</span>: 价格达到止损位时自动平仓，控制单笔最大亏损</li>
+                <li><span className="text-green-400">自动止盈</span>: 价格达到止盈位时自动平仓，锁定盈利</li>
+                <li>客户端每2秒监控持仓状态，触发条件立即执行平仓</li>
+                <li>需要保持网络连接和页面打开</li>
               </ul>
             </div>
           </div>
@@ -2224,21 +1979,8 @@ export default function BinanceAutoTrader() {
                   <th className="px-3 py-2 text-left">数量</th>
                   <th className="px-3 py-2 text-left">入场价</th>
                   <th className="px-3 py-2 text-left">标记价</th>
-                  {tradingConfig.usePartialTakeProfit ? (
-                    <>
-                      <th className="px-3 py-2 text-left text-yellow-400">1R价</th>
-                      <th className="px-3 py-2 text-left text-yellow-400">2R价</th>
-                      <th className="px-3 py-2 text-left text-yellow-400">分段状态</th>
-                    </>
-                  ) : (
-                    <>
-                      <th className="px-3 py-2 text-left text-red-400">止损价</th>
-                      <th className="px-3 py-2 text-left text-green-400">止盈价</th>
-                    </>
-                  )}
-                  {tradingConfig.useTrailingStop && (
-                    <th className="px-3 py-2 text-left text-blue-400">移动止损</th>
-                  )}
+                  <th className="px-3 py-2 text-left text-red-400">止损价</th>
+                  <th className="px-3 py-2 text-left text-green-400">止盈价</th>
                   <th className="px-3 py-2 text-left">未实现盈亏</th>
                   <th className="px-3 py-2 text-left">杠杆</th>
                 </tr>
@@ -2246,21 +1988,12 @@ export default function BinanceAutoTrader() {
               <tbody>
                 {positions.map((pos, index) => {
                   const isLong = pos.positionAmt > 0;
-                  const riskDistance = pos.entryPrice * (tradingConfig.stopLossPercent / 100);
-                  const r1Price = isLong ? pos.entryPrice + riskDistance * strategyParams.riskRewardMultiplier1 : pos.entryPrice - riskDistance * strategyParams.riskRewardMultiplier1;
-                  const r2Price = isLong ? pos.entryPrice + riskDistance * strategyParams.riskRewardMultiplier2 : pos.entryPrice - riskDistance * strategyParams.riskRewardMultiplier2;
-                  const r3Price = isLong ? pos.entryPrice + riskDistance * strategyParams.riskRewardMultiplier3 : pos.entryPrice - riskDistance * strategyParams.riskRewardMultiplier3;
-
                   const stopLossPrice = isLong
                     ? pos.entryPrice * (1 - tradingConfig.stopLossPercent / 100)
                     : pos.entryPrice * (1 + tradingConfig.stopLossPercent / 100);
                   const takeProfitPrice = isLong
                     ? pos.entryPrice * (1 + tradingConfig.takeProfitPercent / 100)
                     : pos.entryPrice * (1 - tradingConfig.takeProfitPercent / 100);
-
-                  const tpExecuted = pos.takeProfitExecuted || { r1: false, r2: false, r3: false };
-                  const highestPrice = pos.highestPrice || pos.entryPrice;
-                  const lowestPrice = pos.lowestPrice || pos.entryPrice;
 
                   // 获取合约精度信息
                   const symbolInfo = symbols.find(s => s.symbol === pos.symbol);
@@ -2279,42 +2012,8 @@ export default function BinanceAutoTrader() {
                       <td className="px-3 py-2">{Math.abs(pos.positionAmt).toFixed(4)}</td>
                       <td className="px-3 py-2">{pos.entryPrice.toFixed(pricePrecision)}</td>
                       <td className="px-3 py-2">{pos.markPrice.toFixed(pricePrecision)}</td>
-
-                      {tradingConfig.usePartialTakeProfit ? (
-                        <>
-                          <td className={`px-3 py-2 ${pos.markPrice >= r1Price ? "text-green-500 font-bold" : "text-yellow-400"}`}>
-                            {r1Price.toFixed(pricePrecision)}
-                            {pos.markPrice >= r1Price && " ✓"}
-                          </td>
-                          <td className={`px-3 py-2 ${pos.markPrice >= r2Price ? "text-green-500 font-bold" : "text-yellow-400"}`}>
-                            {r2Price.toFixed(pricePrecision)}
-                            {pos.markPrice >= r2Price && " ✓"}
-                          </td>
-                          <td className="px-3 py-2 text-xs">
-                            <div className="space-y-1">
-                              <span className={tpExecuted.r1 ? "text-green-500" : "text-gray-500"}>
-                                {tpExecuted.r1 ? "✓ 1R:50%" : "○ 1R:50%"}
-                              </span>
-                              <span className={tpExecuted.r2 ? "text-green-500" : "text-gray-500"}>
-                                {tpExecuted.r2 ? "✓ 2R:100%" : "○ 2R:100%"}
-                              </span>
-                            </div>
-                          </td>
-                        </>
-                      ) : (
-                        <>
-                          <td className="px-3 py-2 text-red-400">{stopLossPrice.toFixed(pricePrecision)}</td>
-                          <td className="px-3 py-2 text-green-400">{takeProfitPrice.toFixed(pricePrecision)}</td>
-                        </>
-                      )}
-
-                      {tradingConfig.useTrailingStop && (
-                        <td className="px-3 py-2 text-blue-400 text-xs">
-                          {pos.trailingStopPrice ? pos.trailingStopPrice.toFixed(pricePrecision) : "-"}
-                          {pos.stopLossBreakeven && " (保本)"}
-                        </td>
-                      )}
-
+                      <td className="px-3 py-2 text-red-400">{stopLossPrice.toFixed(pricePrecision)}</td>
+                      <td className="px-3 py-2 text-green-400">{takeProfitPrice.toFixed(pricePrecision)}</td>
                       <td className={`px-3 py-2 font-semibold ${pos.unRealizedProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
                         {pos.unRealizedProfit >= 0 ? "+" : ""}{pos.unRealizedProfit.toFixed(2)} USDT
                       </td>
@@ -2852,201 +2551,115 @@ export default function BinanceAutoTrader() {
           </div>
 
           <div className="mt-6 pt-6 border-t border-gray-700">
-            <h3 className="text-lg font-bold mb-4">自动平仓管理</h3>
+            <h3 className="text-lg font-bold mb-4">平仓参数设置</h3>
 
-            {/* 平仓模式选择器 */}
-            <div className="mb-6">
-              <div className="flex gap-2 mb-4">
-                <button
-                  onClick={() => setCloseMode('stopTakeProfit')}
-                  className={`flex-1 py-3 px-4 rounded-lg transition ${
-                    closeMode === 'stopTakeProfit'
-                      ? 'bg-green-600 text-white'
-                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                  }`}
-                >
-                  <div className="font-semibold">止盈止损订单</div>
-                  <div className="text-xs opacity-80">推荐模式</div>
-                </button>
-                <button
-                  onClick={() => setCloseMode('partialTrailing')}
-                  className={`flex-1 py-3 px-4 rounded-lg transition ${
-                    closeMode === 'partialTrailing'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                  }`}
-                >
-                  <div className="font-semibold">分段止盈+移动止损</div>
-                  <div className="text-xs opacity-80">高级模式</div>
-                </button>
-                <button
-                  onClick={() => setCloseMode('simple')}
-                  className={`flex-1 py-3 px-4 rounded-lg transition ${
-                    closeMode === 'simple'
-                      ? 'bg-yellow-600 text-white'
-                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                  }`}
-                >
-                  <div className="font-semibold">简单止盈</div>
-                  <div className="text-xs opacity-80">基础模式</div>
-                </button>
-              </div>
-
-              {/* 模式说明 */}
-              <div className="p-4 bg-gray-700/50 rounded-lg">
-                {closeMode === 'stopTakeProfit' && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-lg">✅</span>
-                      <span className="font-semibold text-green-400">止盈止损订单模式（推荐）</span>
-                    </div>
-                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside">
-                      <li>开仓时自动在币安服务器挂止盈止损单</li>
-                      <li>无需客户端持续监控，断网也不影响</li>
-                      <li>止盈止损单自动执行，无需等待</li>
-                      <li>支持止损和止盈同时设置</li>
-                      <li>适合高频交易和需要及时止盈止损的场景</li>
-                    </ul>
-                  </div>
-                )}
-                {closeMode === 'partialTrailing' && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-lg">🎯</span>
-                      <span className="font-semibold text-blue-400">分段止盈+移动止损模式（高级）</span>
-                    </div>
-                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside mb-4">
-                      <li><strong>分段止盈</strong>：可自定义1R、2R、3R倍数和止盈比例</li>
-                      <li><strong>移动止损</strong>：达到1R后止损移到保本价</li>
-                      <li>客户端每2秒监控持仓状态</li>
-                      <li>需要保持网络连接和页面打开</li>
-                      <li>适合有经验的交易者，优化盈亏比</li>
-                    </ul>
-                    {/* 分段止盈配置 */}
-                    <div className="mt-4 p-4 bg-gray-800 rounded-lg">
-                      <div className="text-xs font-semibold text-gray-400 mb-3">分段止盈配置</div>
-                      <div className="grid grid-cols-3 gap-4">
-                        <div>
-                          <label className="block text-xs text-gray-400 mb-1">
-                            1R止盈比例
-                            <span className="text-xs text-gray-500 ml-1">(%)</span>
-                          </label>
-                          <input
-                            type="number"
-                            step="10"
-                            min="0"
-                            max="100"
-                            value={tradingConfig.partialTakeProfitR1}
-                            onChange={(e) =>
-                              setTradingConfig({ ...tradingConfig, partialTakeProfitR1: Math.min(100, Math.max(0, Number(e.target.value))) })
-                            }
-                            className="w-full bg-gray-700 rounded px-2 py-1 text-white text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-400 mb-1">
-                            2R止盈比例
-                            <span className="text-xs text-gray-500 ml-1">(%)</span>
-                          </label>
-                          <input
-                            type="number"
-                            step="10"
-                            min="0"
-                            max="100"
-                            value={tradingConfig.partialTakeProfitR2}
-                            onChange={(e) =>
-                              setTradingConfig({ ...tradingConfig, partialTakeProfitR2: Math.min(100, Math.max(0, Number(e.target.value))) })
-                            }
-                            className="w-full bg-gray-700 rounded px-2 py-1 text-white text-sm"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-400 mb-1">
-                            3R止盈比例
-                            <span className="text-xs text-gray-500 ml-1">(%)</span>
-                          </label>
-                          <input
-                            type="number"
-                            step="10"
-                            min="0"
-                            max="100"
-                            value={tradingConfig.partialTakeProfitR3}
-                            onChange={(e) =>
-                              setTradingConfig({ ...tradingConfig, partialTakeProfitR3: Math.min(100, Math.max(0, Number(e.target.value))) })
-                            }
-                            className="w-full bg-gray-700 rounded px-2 py-1 text-white text-sm"
-                          />
-                        </div>
-                      </div>
-                      <div className="text-xs text-gray-500 mt-2">
-                        说明：1R价格=止损距离×{strategyParams.riskRewardMultiplier1}倍，2R=×{strategyParams.riskRewardMultiplier2}倍，3R=×{strategyParams.riskRewardMultiplier3}倍
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {closeMode === 'simple' && (
-                  <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-lg">📊</span>
-                      <span className="font-semibold text-yellow-400">简单止盈模式（基础）</span>
-                    </div>
-                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside">
-                      <li>单次止盈：达到止盈位全部平仓</li>
-                      <li>自动止损：达到止损位全部平仓</li>
-                      <li>客户端每2秒监控持仓状态</li>
-                      <li>逻辑简单，适合新手使用</li>
-                      <li>盈亏比较固定，无需复杂计算</li>
-                    </ul>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* 通用选项 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* 止损设置 */}
+              <div className="bg-gray-700/30 rounded-lg p-4">
+                <label className="block text-sm text-gray-400 mb-2">止损比例 (%)</label>
+                <div className="flex items-center gap-3">
                   <input
-                    type="checkbox"
-                    checked={tradingConfig.autoStopLoss}
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="10"
+                    value={tradingConfig.stopLossPercent}
                     onChange={(e) =>
-                      setTradingConfig({ ...tradingConfig, autoStopLoss: e.target.checked })
+                      setTradingConfig({ ...tradingConfig, stopLossPercent: Math.min(10, Math.max(0.1, Number(e.target.value))) })
                     }
-                    className="w-4 h-4"
+                    className="flex-1 bg-gray-700 rounded px-3 py-2 text-white text-lg font-semibold"
                   />
-                  <span className="text-sm text-gray-300">自动止损</span>
-                </label>
-                <div className="text-xs text-gray-500 mt-1">
-                  价格达到止损位时自动平仓（所有模式通用）
+                  <span className="text-gray-400">%</span>
+                </div>
+                <div className="text-xs text-gray-500 mt-2">
+                  价格低于/高于入场价 {tradingConfig.stopLossPercent}% 时触发止损
                 </div>
               </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
+
+              {/* 止盈设置 */}
+              <div className="bg-gray-700/30 rounded-lg p-4">
+                <label className="block text-sm text-gray-400 mb-2">止盈比例 (%)</label>
+                <div className="flex items-center gap-3">
                   <input
-                    type="checkbox"
-                    checked={tradingConfig.reverseSignalClose}
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="20"
+                    value={tradingConfig.takeProfitPercent}
                     onChange={(e) =>
-                      setTradingConfig({ ...tradingConfig, reverseSignalClose: e.target.checked })
+                      setTradingConfig({ ...tradingConfig, takeProfitPercent: Math.min(20, Math.max(0.1, Number(e.target.value))) })
                     }
-                    className="w-4 h-4"
+                    className="flex-1 bg-gray-700 rounded px-3 py-2 text-white text-lg font-semibold"
                   />
-                  <span className="text-sm text-gray-300">反向信号平仓</span>
-                </label>
-                <div className="text-xs text-gray-500 mt-1">
-                  出现反向信号时自动平仓（所有模式通用）
+                  <span className="text-gray-400">%</span>
+                </div>
+                <div className="text-xs text-gray-500 mt-2">
+                  价格高于/低于入场价 {tradingConfig.takeProfitPercent}% 时触发止盈
                 </div>
               </div>
             </div>
 
-            <div className="mt-4 p-4 bg-blue-900/20 rounded">
-              <h4 className="font-bold text-blue-400 mb-2">平仓策略说明</h4>
-              <ul className="text-xs text-gray-300 space-y-1 list-disc list-inside">
-                <li><span className="text-green-400">分段止盈</span>: 1R平50%仓位，2R平剩余50%仓位，保护已实现的利润</li>
-                <li><span className="text-green-400">移动止损</span>: 达到1R后，止损价随价格移动，锁定更多利润</li>
-                <li><span className="text-green-400">移动到保本价</span>: 达到1R后，止损移动到入场价，确保不亏损</li>
-                <li><span className="text-yellow-400">R值说明</span>: 1R = 止损距离（如止损0.5%，1R = 价格移动0.5%）</li>
-                <li>每5秒自动检查持仓，触发条件立即执行平仓</li>
-                <li>分段止盈和简单止盈互斥，建议使用分段止盈</li>
+            {/* 价格预览表格 */}
+            {positions.length > 0 && (
+              <div className="mt-4 p-4 bg-gray-700/20 rounded-lg">
+                <h4 className="text-sm font-semibold text-gray-400 mb-3">盈亏价格预览（基于当前持仓）</h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="border-b border-gray-600">
+                      <tr>
+                        <th className="py-2 text-left text-gray-400">合约</th>
+                        <th className="py-2 text-left text-gray-400">方向</th>
+                        <th className="py-2 text-right text-gray-400">入场价</th>
+                        <th className="py-2 text-right text-gray-400">止损价</th>
+                        <th className="py-2 text-right text-gray-400">止盈价</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {positions.slice(0, 5).map((pos, index) => {
+                        const isLong = pos.positionAmt > 0;
+                        const stopLossPrice = isLong
+                          ? pos.entryPrice * (1 - tradingConfig.stopLossPercent / 100)
+                          : pos.entryPrice * (1 + tradingConfig.stopLossPercent / 100);
+                        const takeProfitPrice = isLong
+                          ? pos.entryPrice * (1 + tradingConfig.takeProfitPercent / 100)
+                          : pos.entryPrice * (1 - tradingConfig.takeProfitPercent / 100);
+                        const symbolInfo = symbols.find(s => s.symbol === pos.symbol);
+                        const pricePrecision = symbolInfo?.pricePrecision ?? 2;
+
+                        return (
+                          <tr key={index} className="border-b border-gray-700/50">
+                            <td className="py-2">{pos.symbol}</td>
+                            <td className="py-2">
+                              <span className={`px-1.5 py-0.5 rounded text-xs ${isLong ? 'bg-green-600/20 text-green-400' : 'bg-red-600/20 text-red-400'}`}>
+                                {isLong ? '做多' : '做空'}
+                              </span>
+                            </td>
+                            <td className="py-2 text-right">{pos.entryPrice.toFixed(pricePrecision)}</td>
+                            <td className="py-2 text-right text-red-400">{stopLossPrice.toFixed(pricePrecision)}</td>
+                            <td className="py-2 text-right text-green-400">{takeProfitPrice.toFixed(pricePrecision)}</td>
+                          </tr>
+                        );
+                      })}
+                      {positions.length > 5 && (
+                        <tr>
+                          <td colSpan={5} className="py-2 text-center text-gray-500">
+                            还有 {positions.length - 5} 个持仓未显示...
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 p-4 bg-gray-700/20 rounded-lg">
+              <h4 className="text-sm font-semibold text-gray-400 mb-2">平仓策略说明</h4>
+              <ul className="text-xs text-gray-500 space-y-1 list-disc list-inside">
+                <li><span className="text-red-400">自动止损</span>: 价格达到止损位时自动平仓，控制单笔最大亏损</li>
+                <li><span className="text-green-400">自动止盈</span>: 价格达到止盈位时自动平仓，锁定盈利</li>
+                <li>客户端每2秒监控持仓状态，触发条件立即执行平仓</li>
+                <li>需要保持网络连接和页面打开</li>
               </ul>
             </div>
           </div>
