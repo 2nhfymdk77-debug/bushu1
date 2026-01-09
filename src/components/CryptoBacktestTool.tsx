@@ -1407,21 +1407,23 @@ export default function CryptoBacktestTool() {
           trades = runEMABacktest(data15m, data5m);
         }
 
-        // 计算 EMA 指标用于图表显示
-        const klineData15m: any[] = data15m.map(k => ({
-          timestamp: k.timestamp,
-          open: k.open,
-          high: k.high,
-          low: k.low,
-          close: k.close,
-          volume: k.volume,
-        }));
+        // 计算 EMA 指标用于图表显示（仅 EMA 策略）
+        if (selectedStrategy !== "smc_liquidity_fvg") {
+          const klineData15m: any[] = data15m.map(k => ({
+            timestamp: k.timestamp,
+            open: k.open,
+            high: k.high,
+            low: k.low,
+            close: k.close,
+            volume: k.volume,
+          }));
 
-        const emaShort15m = strategy.calculateEMA(klineData15m, params.emaShort || 20);
-        const emaLong15m = strategy.calculateEMA(klineData15m, params.emaLong || 60);
+          const emaShort15m = strategy.calculateEMA(klineData15m, params.emaShort || 20);
+          const emaLong15m = strategy.calculateEMA(klineData15m, params.emaLong || 60);
 
-        setEmaShort15m(emaShort15m);
-        setEmaLong15m(emaLong15m);
+          setEmaShort15m(emaShort15m);
+          setEmaLong15m(emaLong15m);
+        }
 
         // 计算统计结果
         const winningTrades = trades.filter(t => t.pnl > 0);
@@ -1486,7 +1488,7 @@ export default function CryptoBacktestTool() {
         });
       } catch (error) {
         console.error("回测出错:", error);
-        alert("回测过程中发生错误，请检查数据");
+        alert(`回测过程中发生错误: ${error instanceof Error ? error.message : String(error)}\n请检查控制台获取详细信息`);
       } finally {
         setIsLoading(false);
       }
