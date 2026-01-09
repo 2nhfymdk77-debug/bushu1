@@ -238,7 +238,9 @@ export default function BinanceAutoTrader() {
   const [systemLog, setSystemLog] = useState<string[]>([]); // 系统日志（交易、WebSocket、系统事件）
   const [customIntervalMinutes, setCustomIntervalMinutes] = useState(5); // 自定义间隔时间（分钟）
   const [contractPool, setContractPool] = useState<string[]>([]); // 合约池（高成交量合约列表）
+  const [closeMode, setCloseMode] = useState<'stopTakeProfit' | 'partialTrailing' | 'simple'>('stopTakeProfit'); // 平仓模式选择
   const [currentBatchIndex, setCurrentBatchIndex] = useState(0); // 当前扫描批次索引
+  const [showAdvancedParams, setShowAdvancedParams] = useState(false); // 显示高级参数
 
   const wsRef = useRef<WebSocket | null>(null);
   const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -263,6 +265,40 @@ export default function BinanceAutoTrader() {
     if (savedApiKey) setApiKey(savedApiKey);
     if (savedApiSecret) setApiSecret(savedApiSecret);
   }, []);
+
+  // 根据平仓模式自动配置相关参数
+  useEffect(() => {
+    switch (closeMode) {
+      case 'stopTakeProfit':
+        setTradingConfig({
+          ...tradingConfig,
+          useStopTakeProfitOrders: true,
+          usePartialTakeProfit: false,
+          useTrailingStop: false,
+          autoTakeProfit: false,
+        });
+        break;
+      case 'partialTrailing':
+        setTradingConfig({
+          ...tradingConfig,
+          useStopTakeProfitOrders: false,
+          usePartialTakeProfit: true,
+          useTrailingStop: true,
+          trailingStopMoveToBreakeven: true,
+          autoTakeProfit: false,
+        });
+        break;
+      case 'simple':
+        setTradingConfig({
+          ...tradingConfig,
+          useStopTakeProfitOrders: false,
+          usePartialTakeProfit: false,
+          useTrailingStop: false,
+          autoTakeProfit: true,
+        });
+        break;
+    }
+  }, [closeMode]);
 
   // 自动扫描所有合约
   const scanAllSymbols = async () => {
@@ -2260,25 +2296,96 @@ export default function BinanceAutoTrader() {
           <div className="mt-6 pt-6 border-t border-gray-700">
             <h3 className="text-lg font-bold mb-4">自动平仓管理</h3>
 
-            {/* 当前模式指示器 */}
-            <div className="mb-4 p-3 rounded-lg" style={{
-              backgroundColor: tradingConfig.useStopTakeProfitOrders ? 'rgba(34, 197, 94, 0.2)' : 'rgba(59, 130, 246, 0.2)'
-            }}>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold" style={{
-                  color: tradingConfig.useStopTakeProfitOrders ? '#22c55e' : '#3b82f6'
-                }}>
-                  当前模式: {tradingConfig.useStopTakeProfitOrders ? '止盈止损订单（自动挂单）' : '客户端监控（分段止盈+移动止损）'}
-                </span>
+            {/* 平仓模式选择器 */}
+            <div className="mb-6">
+              <div className="flex gap-2 mb-4">
+                <button
+                  onClick={() => setCloseMode('stopTakeProfit')}
+                  className={`flex-1 py-3 px-4 rounded-lg transition ${
+                    closeMode === 'stopTakeProfit'
+                      ? 'bg-green-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  <div className="font-semibold">止盈止损订单</div>
+                  <div className="text-xs opacity-80">推荐模式</div>
+                </button>
+                <button
+                  onClick={() => setCloseMode('partialTrailing')}
+                  className={`flex-1 py-3 px-4 rounded-lg transition ${
+                    closeMode === 'partialTrailing'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  <div className="font-semibold">分段止盈+移动止损</div>
+                  <div className="text-xs opacity-80">高级模式</div>
+                </button>
+                <button
+                  onClick={() => setCloseMode('simple')}
+                  className={`flex-1 py-3 px-4 rounded-lg transition ${
+                    closeMode === 'simple'
+                      ? 'bg-yellow-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  <div className="font-semibold">简单止盈</div>
+                  <div className="text-xs opacity-80">基础模式</div>
+                </button>
               </div>
-              <div className="text-xs text-gray-400 mt-1">
-                {tradingConfig.useStopTakeProfitOrders
-                  ? '开仓时自动在币安服务器挂止盈止损单，无需客户端持续监控。'
-                  : '客户端每2秒监控持仓，执行分段止盈和移动止损逻辑。'}
+
+              {/* 模式说明 */}
+              <div className="p-4 bg-gray-700/50 rounded-lg">
+                {closeMode === 'stopTakeProfit' && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-lg">✅</span>
+                      <span className="font-semibold text-green-400">止盈止损订单模式（推荐）</span>
+                    </div>
+                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside">
+                      <li>开仓时自动在币安服务器挂止盈止损单</li>
+                      <li>无需客户端持续监控，断网也不影响</li>
+                      <li>止盈止损单自动执行，无需等待</li>
+                      <li>支持止损和止盈同时设置</li>
+                      <li>适合高频交易和需要及时止盈止损的场景</li>
+                    </ul>
+                  </div>
+                )}
+                {closeMode === 'partialTrailing' && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-lg">🎯</span>
+                      <span className="font-semibold text-blue-400">分段止盈+移动止损模式（高级）</span>
+                    </div>
+                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside">
+                      <li><strong>分段止盈</strong>：1R平50%，2R-3R全平</li>
+                      <li><strong>移动止损</strong>：达到1R后止损移到保本价</li>
+                      <li>客户端每2秒监控持仓状态</li>
+                      <li>需要保持网络连接和页面打开</li>
+                      <li>适合有经验的交易者，优化盈亏比</li>
+                    </ul>
+                  </div>
+                )}
+                {closeMode === 'simple' && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-lg">📊</span>
+                      <span className="font-semibold text-yellow-400">简单止盈模式（基础）</span>
+                    </div>
+                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside">
+                      <li>单次止盈：达到止盈位全部平仓</li>
+                      <li>自动止损：达到止损位全部平仓</li>
+                      <li>客户端每2秒监控持仓状态</li>
+                      <li>逻辑简单，适合新手使用</li>
+                      <li>盈亏比较固定，无需复杂计算</li>
+                    </ul>
+                  </div>
+                )}
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* 通用选项 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -2292,109 +2399,7 @@ export default function BinanceAutoTrader() {
                   <span className="text-sm text-gray-300">自动止损</span>
                 </label>
                 <div className="text-xs text-gray-500 mt-1">
-                  价格达到止损位时自动平仓
-                </div>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={tradingConfig.autoTakeProfit}
-                    onChange={(e) =>
-                      setTradingConfig({ ...tradingConfig, autoTakeProfit: e.target.checked })
-                    }
-                    disabled={tradingConfig.usePartialTakeProfit}
-                    className="w-4 h-4"
-                  />
-                  <span className={`text-sm ${tradingConfig.usePartialTakeProfit ? "text-gray-500" : "text-gray-300"}`}>
-                    自动止盈（简单）
-                  </span>
-                </label>
-                <div className="text-xs text-gray-500 mt-1">
-                  {tradingConfig.usePartialTakeProfit ? "已使用分段止盈" : "价格达到止盈位时自动平仓"}
-                </div>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={tradingConfig.usePartialTakeProfit}
-                    onChange={(e) => {
-                      const newConfig = { ...tradingConfig, usePartialTakeProfit: e.target.checked };
-                      if (e.target.checked) {
-                        newConfig.autoTakeProfit = false; // 开启分段止盈时关闭简单止盈
-                        newConfig.useStopTakeProfitOrders = false; // 开启分段止盈时关闭止盈止损订单
-                      }
-                      setTradingConfig(newConfig);
-                    }}
-                    className="w-4 h-4"
-                  />
-                  <span className="text-sm text-gray-300">分段止盈</span>
-                </label>
-                <div className="text-xs text-gray-500 mt-1">
-                  1R平50%，2R-3R全平
-                </div>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={tradingConfig.useStopTakeProfitOrders}
-                    onChange={(e) => {
-                      const newConfig = { ...tradingConfig, useStopTakeProfitOrders: e.target.checked };
-                      if (e.target.checked) {
-                        newConfig.usePartialTakeProfit = false; // 开启止盈止损订单时关闭分段止盈
-                        newConfig.autoTakeProfit = false; // 开启止盈止损订单时关闭简单止盈
-                        newConfig.useTrailingStop = false; // 开启止盈止损订单时关闭移动止损
-                      }
-                      setTradingConfig(newConfig);
-                    }}
-                    className="w-4 h-4"
-                  />
-                  <span className="text-sm text-gray-300">止盈止损订单</span>
-                </label>
-                <div className="text-xs text-gray-500 mt-1">
-                  开仓时同时挂止盈止损单，无需手动监控
-                </div>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={tradingConfig.useTrailingStop}
-                    onChange={(e) => {
-                      const newConfig = { ...tradingConfig, useTrailingStop: e.target.checked };
-                      if (e.target.checked) {
-                        newConfig.useStopTakeProfitOrders = false; // 开启移动止损时关闭止盈止损订单
-                      }
-                      setTradingConfig(newConfig);
-                    }}
-                    disabled={tradingConfig.useStopTakeProfitOrders}
-                    className="w-4 h-4"
-                  />
-                  <span className={`text-sm ${tradingConfig.useStopTakeProfitOrders ? "text-gray-500" : "text-gray-300"}`}>移动止损</span>
-                </label>
-                <div className="text-xs text-gray-500 mt-1">
-                  {tradingConfig.useStopTakeProfitOrders ? "已使用止盈止损订单" : "达到1R后移动止损"}
-                </div>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={tradingConfig.trailingStopMoveToBreakeven}
-                    onChange={(e) =>
-                      setTradingConfig({ ...tradingConfig, trailingStopMoveToBreakeven: e.target.checked })
-                    }
-                    disabled={!tradingConfig.useTrailingStop}
-                    className="w-4 h-4"
-                  />
-                  <span className={`text-sm ${!tradingConfig.useTrailingStop ? "text-gray-500" : "text-gray-300"}`}>
-                    移动到保本价
-                  </span>
-                </label>
-                <div className="text-xs text-gray-500 mt-1">
-                  {!tradingConfig.useTrailingStop ? "需先开启移动止损" : "达到1R后止损移到保本"}
+                  价格达到止损位时自动平仓（所有模式通用）
                 </div>
               </div>
               <div>
@@ -2410,7 +2415,7 @@ export default function BinanceAutoTrader() {
                   <span className="text-sm text-gray-300">反向信号平仓</span>
                 </label>
                 <div className="text-xs text-gray-500 mt-1">
-                  出现反向信号时自动平仓
+                  出现反向信号时自动平仓（所有模式通用）
                 </div>
               </div>
             </div>
@@ -2704,7 +2709,9 @@ export default function BinanceAutoTrader() {
 
           <div className="mt-6 pt-6 border-t border-gray-700">
             <h3 className="text-lg font-bold mb-4">策略参数</h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+
+            {/* 基本参数 */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
               <div>
                 <label className="block text-sm text-gray-400 mb-1">EMA短期</label>
                 <input
@@ -2756,75 +2763,141 @@ export default function BinanceAutoTrader() {
                   className="w-full bg-gray-700 rounded px-3 py-2 text-white"
                 />
                 <div className="text-xs text-gray-500 mt-1">
-                  自动扫描时使用的合约数量 (10-1000, 默认500)
+                  10-1000, 默认500
                 </div>
               </div>
             </div>
+
+            {/* 高级参数折叠面板 */}
+            <button
+              onClick={() => setShowAdvancedParams(!showAdvancedParams)}
+              className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition mb-3"
+            >
+              <span className={`transform transition-transform ${showAdvancedParams ? 'rotate-90' : ''}`}>▶</span>
+              <span>高级参数</span>
+              <span className="text-xs text-gray-500">（RSI、成交量等）</span>
+            </button>
+
+            {showAdvancedParams && (
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 p-4 bg-gray-700/30 rounded-lg">
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">RSI周期</label>
+                  <input
+                    type="number"
+                    value={strategyParams.rsiPeriod}
+                    onChange={(e) =>
+                      setStrategyParams({ ...strategyParams, rsiPeriod: Number(e.target.value) })
+                    }
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">成交量周期</label>
+                  <input
+                    type="number"
+                    value={strategyParams.volumePeriod}
+                    onChange={(e) =>
+                      setStrategyParams({ ...strategyParams, volumePeriod: Number(e.target.value) })
+                    }
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="mt-6 pt-6 border-t border-gray-700">
             <h3 className="text-lg font-bold mb-4">5分钟进场筛选条件</h3>
-            <div className="bg-gray-700 rounded-lg p-4 mb-4">
-              <div className="mb-4">
-                <label className="block text-sm text-gray-400 mb-1">需要满足的最少条件数</label>
-                <div className="flex items-center gap-4">
-                  <input
-                    type="number"
-                    step="1"
-                    min="1"
-                    max="4"
-                    value={strategyParams.minConditionsRequired}
-                    onChange={(e) => {
-                      const value = Math.min(4, Math.max(1, Number(e.target.value)));
-                      setStrategyParams({ ...strategyParams, minConditionsRequired: value });
-                    }}
-                    className="w-24 bg-gray-600 rounded px-3 py-2 text-white"
-                  />
-                  <div className="text-xs text-gray-500">
-                    范围: 1-4 个条件 (默认 2 个)
+
+            {/* 条件概览 */}
+            <div className="flex items-center justify-between mb-4 p-4 bg-gray-700 rounded-lg">
+              <div className="flex items-center gap-4">
+                <div>
+                  <div className="text-xs text-gray-400">需要满足的条件数</div>
+                  <div className="text-2xl font-bold text-blue-400">
+                    {strategyParams.minConditionsRequired}<span className="text-sm text-gray-500"> / 4</span>
+                  </div>
+                </div>
+                <div className="h-10 w-px bg-gray-600" />
+                <div>
+                  <div className="text-xs text-gray-400">已启用的条件</div>
+                  <div className="text-2xl font-bold text-green-400">
+                    {[
+                      strategyParams.enablePriceEMAFilter,
+                      strategyParams.enableRSIFilter,
+                      strategyParams.enableTouchedEmaFilter,
+                      strategyParams.enableCandleColorFilter
+                    ].filter(Boolean).length}<span className="text-sm text-gray-500"> / 4</span>
                   </div>
                 </div>
               </div>
-              <div className="text-sm text-gray-300 border-t border-gray-600 pt-3">
-                说明：进场需要满足 <strong className="text-blue-400">至少 {strategyParams.minConditionsRequired}/4 个条件</strong>。关闭某个条件后，该条件将自动视为已满足。
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  max="4"
+                  value={strategyParams.minConditionsRequired}
+                  onChange={(e) => {
+                    const value = Math.min(4, Math.max(1, Number(e.target.value)));
+                    setStrategyParams({ ...strategyParams, minConditionsRequired: value });
+                  }}
+                  className="w-20 bg-gray-600 rounded px-3 py-2 text-white text-center text-lg font-bold"
+                />
+                <div className="text-xs text-gray-500 text-right">
+                  <div>调整条件数</div>
+                  <div>(1-4)</div>
+                </div>
               </div>
             </div>
+
+            {/* 条件列表 */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* 价格与EMA关系 */}
-              <div className="bg-gray-700/50 rounded-lg p-3">
-                <label className="flex items-center gap-2 cursor-pointer mb-2">
+              <div className={`bg-gray-700/50 rounded-lg p-4 border-2 transition ${
+                strategyParams.enablePriceEMAFilter ? 'border-blue-500/50' : 'border-transparent opacity-60'
+              }`}>
+                <label className="flex items-center gap-2 cursor-pointer mb-3">
                   <input
                     type="checkbox"
                     checked={strategyParams.enablePriceEMAFilter}
                     onChange={(e) =>
                       setStrategyParams({ ...strategyParams, enablePriceEMAFilter: e.target.checked })
                     }
-                    className="w-4 h-4"
+                    className="w-5 h-5"
                   />
-                  <span className="text-sm text-gray-300">价格与EMA关系</span>
+                  <span className={`text-sm font-semibold ${strategyParams.enablePriceEMAFilter ? 'text-white' : 'text-gray-400'}`}>
+                    价格与EMA关系
+                  </span>
+                  {strategyParams.enablePriceEMAFilter && <span className="ml-auto text-xs bg-blue-600 px-2 py-1 rounded">启用</span>}
                 </label>
-                <div className="text-xs text-gray-500 ml-6">
-                  <div>多头: 价格 {'>'} EMA{strategyParams.emaShort}</div>
-                  <div>空头: 价格 {'<'} EMA{strategyParams.emaShort}</div>
+                <div className="text-xs text-gray-400 space-y-1 ml-7">
+                  <div>多头: 价格 <span className="text-green-400">{`>`}</span> EMA{strategyParams.emaShort}</div>
+                  <div>空头: 价格 <span className="text-red-400">{`<`}</span> EMA{strategyParams.emaShort}</div>
                 </div>
               </div>
 
               {/* RSI超买超卖检测 */}
-              <div className="bg-gray-700/50 rounded-lg p-3">
-                <label className="flex items-center gap-2 cursor-pointer mb-2">
+              <div className={`bg-gray-700/50 rounded-lg p-4 border-2 transition ${
+                strategyParams.enableRSIFilter ? 'border-blue-500/50' : 'border-transparent opacity-60'
+              }`}>
+                <label className="flex items-center gap-2 cursor-pointer mb-3">
                   <input
                     type="checkbox"
                     checked={strategyParams.enableRSIFilter}
                     onChange={(e) =>
                       setStrategyParams({ ...strategyParams, enableRSIFilter: e.target.checked })
                     }
-                    className="w-4 h-4"
+                    className="w-5 h-5"
                   />
-                  <span className="text-sm text-gray-300">RSI超买超卖检测</span>
+                  <span className={`text-sm font-semibold ${strategyParams.enableRSIFilter ? 'text-white' : 'text-gray-400'}`}>
+                    RSI超买超卖检测
+                  </span>
+                  {strategyParams.enableRSIFilter && <span className="ml-auto text-xs bg-blue-600 px-2 py-1 rounded">启用</span>}
                 </label>
-                <div className="text-xs text-gray-500 ml-6 space-y-1">
-                  <div>多头: RSI {'<'} 阈值 且上升</div>
-                  <div>空头: RSI {'>'} 阈值 且下降</div>
+                <div className="text-xs text-gray-400 space-y-1 ml-7">
+                  <div>多头: RSI <span className="text-green-400">{`<`}</span> 阈值 且上升</div>
+                  <div>空头: RSI <span className="text-red-400">{`>`}</span> 阈值 且下降</div>
                   {strategyParams.enableRSIFilter && (
                     <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-600">
                       <span>阈值:</span>
@@ -2840,28 +2913,33 @@ export default function BinanceAutoTrader() {
                             rsiThreshold: Math.min(100, Math.max(0, Number(e.target.value)))
                           })
                         }
-                        className="w-16 bg-gray-600 rounded px-2 py-1 text-xs text-white"
+                        className="w-16 bg-gray-600 rounded px-2 py-1 text-white text-center"
                       />
-                      <span>(默认50)</span>
+                      <span className="text-gray-500">(默认50)</span>
                     </div>
                   )}
                 </div>
               </div>
 
               {/* EMA回踩/反弹检测 */}
-              <div className="bg-gray-700/50 rounded-lg p-3">
-                <label className="flex items-center gap-2 cursor-pointer mb-2">
+              <div className={`bg-gray-700/50 rounded-lg p-4 border-2 transition ${
+                strategyParams.enableTouchedEmaFilter ? 'border-blue-500/50' : 'border-transparent opacity-60'
+              }`}>
+                <label className="flex items-center gap-2 cursor-pointer mb-3">
                   <input
                     type="checkbox"
                     checked={strategyParams.enableTouchedEmaFilter}
                     onChange={(e) =>
                       setStrategyParams({ ...strategyParams, enableTouchedEmaFilter: e.target.checked })
                     }
-                    className="w-4 h-4"
+                    className="w-5 h-5"
                   />
-                  <span className="text-sm text-gray-300">EMA回踩/反弹检测</span>
+                  <span className={`text-sm font-semibold ${strategyParams.enableTouchedEmaFilter ? 'text-white' : 'text-gray-400'}`}>
+                    EMA回踩/反弹检测
+                  </span>
+                  {strategyParams.enableTouchedEmaFilter && <span className="ml-auto text-xs bg-blue-600 px-2 py-1 rounded">启用</span>}
                 </label>
-                <div className="text-xs text-gray-500 ml-6 space-y-1">
+                <div className="text-xs text-gray-400 space-y-1 ml-7">
                   <div>多头: 最近N根触及EMA{strategyParams.emaShort}下方</div>
                   <div>空头: 最近N根触及EMA{strategyParams.emaShort}上方</div>
                   {strategyParams.enableTouchedEmaFilter && (
@@ -2879,29 +2957,34 @@ export default function BinanceAutoTrader() {
                             emaTouchLookback: Math.min(10, Math.max(2, Number(e.target.value)))
                           })
                         }
-                        className="w-16 bg-gray-600 rounded px-2 py-1 text-xs text-white"
+                        className="w-16 bg-gray-600 rounded px-2 py-1 text-white text-center"
                       />
-                      <span>根(默认3)</span>
+                      <span className="text-gray-500">根(默认3)</span>
                     </div>
                   )}
                 </div>
               </div>
 
               {/* K线颜色确认 */}
-              <div className="bg-gray-700/50 rounded-lg p-3">
-                <label className="flex items-center gap-2 cursor-pointer mb-2">
+              <div className={`bg-gray-700/50 rounded-lg p-4 border-2 transition ${
+                strategyParams.enableCandleColorFilter ? 'border-blue-500/50' : 'border-transparent opacity-60'
+              }`}>
+                <label className="flex items-center gap-2 cursor-pointer mb-3">
                   <input
                     type="checkbox"
                     checked={strategyParams.enableCandleColorFilter}
                     onChange={(e) =>
                       setStrategyParams({ ...strategyParams, enableCandleColorFilter: e.target.checked })
                     }
-                    className="w-4 h-4"
+                    className="w-5 h-5"
                   />
-                  <span className="text-sm text-gray-300">K线颜色确认</span>
+                  <span className={`text-sm font-semibold ${strategyParams.enableCandleColorFilter ? 'text-white' : 'text-gray-400'}`}>
+                    K线颜色确认
+                  </span>
+                  {strategyParams.enableCandleColorFilter && <span className="ml-auto text-xs bg-blue-600 px-2 py-1 rounded">启用</span>}
                 </label>
-                <div className="text-xs text-gray-500 ml-6 space-y-1">
-                  <div>多头: 阳线 | 空头: 阴线</div>
+                <div className="text-xs text-gray-400 space-y-1 ml-7">
+                  <div>多头: <span className="text-green-400">阳线</span> | 空头: <span className="text-red-400">阴线</span></div>
                   {strategyParams.enableCandleColorFilter && (
                     <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-600">
                       <span>最小涨跌幅:</span>
@@ -2941,25 +3024,96 @@ export default function BinanceAutoTrader() {
           <div className="mt-6 pt-6 border-t border-gray-700">
             <h3 className="text-lg font-bold mb-4">自动平仓管理</h3>
 
-            {/* 当前模式指示器 */}
-            <div className="mb-4 p-3 rounded-lg" style={{
-              backgroundColor: tradingConfig.useStopTakeProfitOrders ? 'rgba(34, 197, 94, 0.2)' : 'rgba(59, 130, 246, 0.2)'
-            }}>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold" style={{
-                  color: tradingConfig.useStopTakeProfitOrders ? '#22c55e' : '#3b82f6'
-                }}>
-                  当前模式: {tradingConfig.useStopTakeProfitOrders ? '止盈止损订单（自动挂单）' : '客户端监控（分段止盈+移动止损）'}
-                </span>
+            {/* 平仓模式选择器 */}
+            <div className="mb-6">
+              <div className="flex gap-2 mb-4">
+                <button
+                  onClick={() => setCloseMode('stopTakeProfit')}
+                  className={`flex-1 py-3 px-4 rounded-lg transition ${
+                    closeMode === 'stopTakeProfit'
+                      ? 'bg-green-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  <div className="font-semibold">止盈止损订单</div>
+                  <div className="text-xs opacity-80">推荐模式</div>
+                </button>
+                <button
+                  onClick={() => setCloseMode('partialTrailing')}
+                  className={`flex-1 py-3 px-4 rounded-lg transition ${
+                    closeMode === 'partialTrailing'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  <div className="font-semibold">分段止盈+移动止损</div>
+                  <div className="text-xs opacity-80">高级模式</div>
+                </button>
+                <button
+                  onClick={() => setCloseMode('simple')}
+                  className={`flex-1 py-3 px-4 rounded-lg transition ${
+                    closeMode === 'simple'
+                      ? 'bg-yellow-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  <div className="font-semibold">简单止盈</div>
+                  <div className="text-xs opacity-80">基础模式</div>
+                </button>
               </div>
-              <div className="text-xs text-gray-400 mt-1">
-                {tradingConfig.useStopTakeProfitOrders
-                  ? '开仓时自动在币安服务器挂止盈止损单，无需客户端持续监控。'
-                  : '客户端每2秒监控持仓，执行分段止盈和移动止损逻辑。'}
+
+              {/* 模式说明 */}
+              <div className="p-4 bg-gray-700/50 rounded-lg">
+                {closeMode === 'stopTakeProfit' && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-lg">✅</span>
+                      <span className="font-semibold text-green-400">止盈止损订单模式（推荐）</span>
+                    </div>
+                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside">
+                      <li>开仓时自动在币安服务器挂止盈止损单</li>
+                      <li>无需客户端持续监控，断网也不影响</li>
+                      <li>止盈止损单自动执行，无需等待</li>
+                      <li>支持止损和止盈同时设置</li>
+                      <li>适合高频交易和需要及时止盈止损的场景</li>
+                    </ul>
+                  </div>
+                )}
+                {closeMode === 'partialTrailing' && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-lg">🎯</span>
+                      <span className="font-semibold text-blue-400">分段止盈+移动止损模式（高级）</span>
+                    </div>
+                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside">
+                      <li><strong>分段止盈</strong>：1R平50%，2R-3R全平</li>
+                      <li><strong>移动止损</strong>：达到1R后止损移到保本价</li>
+                      <li>客户端每2秒监控持仓状态</li>
+                      <li>需要保持网络连接和页面打开</li>
+                      <li>适合有经验的交易者，优化盈亏比</li>
+                    </ul>
+                  </div>
+                )}
+                {closeMode === 'simple' && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-lg">📊</span>
+                      <span className="font-semibold text-yellow-400">简单止盈模式（基础）</span>
+                    </div>
+                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside">
+                      <li>单次止盈：达到止盈位全部平仓</li>
+                      <li>自动止损：达到止损位全部平仓</li>
+                      <li>客户端每2秒监控持仓状态</li>
+                      <li>逻辑简单，适合新手使用</li>
+                      <li>盈亏比较固定，无需复杂计算</li>
+                    </ul>
+                  </div>
+                )}
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* 通用选项 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -2973,109 +3127,7 @@ export default function BinanceAutoTrader() {
                   <span className="text-sm text-gray-300">自动止损</span>
                 </label>
                 <div className="text-xs text-gray-500 mt-1">
-                  价格达到止损位时自动平仓
-                </div>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={tradingConfig.autoTakeProfit}
-                    onChange={(e) =>
-                      setTradingConfig({ ...tradingConfig, autoTakeProfit: e.target.checked })
-                    }
-                    disabled={tradingConfig.usePartialTakeProfit}
-                    className="w-4 h-4"
-                  />
-                  <span className={`text-sm ${tradingConfig.usePartialTakeProfit ? "text-gray-500" : "text-gray-300"}`}>
-                    自动止盈（简单）
-                  </span>
-                </label>
-                <div className="text-xs text-gray-500 mt-1">
-                  {tradingConfig.usePartialTakeProfit ? "已使用分段止盈" : "价格达到止盈位时自动平仓"}
-                </div>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={tradingConfig.usePartialTakeProfit}
-                    onChange={(e) => {
-                      const newConfig = { ...tradingConfig, usePartialTakeProfit: e.target.checked };
-                      if (e.target.checked) {
-                        newConfig.autoTakeProfit = false; // 开启分段止盈时关闭简单止盈
-                        newConfig.useStopTakeProfitOrders = false; // 开启分段止盈时关闭止盈止损订单
-                      }
-                      setTradingConfig(newConfig);
-                    }}
-                    className="w-4 h-4"
-                  />
-                  <span className="text-sm text-gray-300">分段止盈</span>
-                </label>
-                <div className="text-xs text-gray-500 mt-1">
-                  1R平50%，2R-3R全平
-                </div>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={tradingConfig.useStopTakeProfitOrders}
-                    onChange={(e) => {
-                      const newConfig = { ...tradingConfig, useStopTakeProfitOrders: e.target.checked };
-                      if (e.target.checked) {
-                        newConfig.usePartialTakeProfit = false; // 开启止盈止损订单时关闭分段止盈
-                        newConfig.autoTakeProfit = false; // 开启止盈止损订单时关闭简单止盈
-                        newConfig.useTrailingStop = false; // 开启止盈止损订单时关闭移动止损
-                      }
-                      setTradingConfig(newConfig);
-                    }}
-                    className="w-4 h-4"
-                  />
-                  <span className="text-sm text-gray-300">止盈止损订单</span>
-                </label>
-                <div className="text-xs text-gray-500 mt-1">
-                  开仓时同时挂止盈止损单，无需手动监控
-                </div>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={tradingConfig.useTrailingStop}
-                    onChange={(e) => {
-                      const newConfig = { ...tradingConfig, useTrailingStop: e.target.checked };
-                      if (e.target.checked) {
-                        newConfig.useStopTakeProfitOrders = false; // 开启移动止损时关闭止盈止损订单
-                      }
-                      setTradingConfig(newConfig);
-                    }}
-                    disabled={tradingConfig.useStopTakeProfitOrders}
-                    className="w-4 h-4"
-                  />
-                  <span className={`text-sm ${tradingConfig.useStopTakeProfitOrders ? "text-gray-500" : "text-gray-300"}`}>移动止损</span>
-                </label>
-                <div className="text-xs text-gray-500 mt-1">
-                  {tradingConfig.useStopTakeProfitOrders ? "已使用止盈止损订单" : "达到1R后移动止损"}
-                </div>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={tradingConfig.trailingStopMoveToBreakeven}
-                    onChange={(e) =>
-                      setTradingConfig({ ...tradingConfig, trailingStopMoveToBreakeven: e.target.checked })
-                    }
-                    disabled={!tradingConfig.useTrailingStop}
-                    className="w-4 h-4"
-                  />
-                  <span className={`text-sm ${!tradingConfig.useTrailingStop ? "text-gray-500" : "text-gray-300"}`}>
-                    移动到保本价
-                  </span>
-                </label>
-                <div className="text-xs text-gray-500 mt-1">
-                  {!tradingConfig.useTrailingStop ? "需先开启移动止损" : "达到1R后止损移到保本"}
+                  价格达到止损位时自动平仓（所有模式通用）
                 </div>
               </div>
               <div>
@@ -3091,7 +3143,7 @@ export default function BinanceAutoTrader() {
                   <span className="text-sm text-gray-300">反向信号平仓</span>
                 </label>
                 <div className="text-xs text-gray-500 mt-1">
-                  出现反向信号时自动平仓
+                  出现反向信号时自动平仓（所有模式通用）
                 </div>
               </div>
             </div>
