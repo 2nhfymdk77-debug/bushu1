@@ -372,59 +372,13 @@ function ActivityList({ isMobile }: { isMobile: boolean }) {
 import StrategySelector from "@/components/StrategySelector";
 import TradingMonitor from "@/components/TradingMonitor";
 import TradingRecords from "@/components/TradingRecords";
+import CryptoBacktestTool from "@/components/CryptoBacktestTool";
 
 // 策略回测页面
 function BacktestPage({ isMobile }: { isMobile: boolean }) {
-  const [selectedStrategy, setSelectedStrategy] = useState<{
-    id: string;
-    params: any;
-  } | null>(null);
-
-  const handleStrategyChange = (strategyId: string, params: any) => {
-    setSelectedStrategy({ id: strategyId, params });
-  };
-
   return (
-    <div className="space-y-6">
-      <StrategySelector
-        onStrategyChange={handleStrategyChange}
-        disabled={false}
-      />
-      
-      {selectedStrategy && (
-        <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
-          <h3 className="font-semibold mb-4">回测配置</h3>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">交易对</label>
-              <input
-                type="text"
-                placeholder="例如: BTCUSDT"
-                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">开始时间</label>
-                <input
-                  type="date"
-                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">结束时间</label>
-                <input
-                  type="date"
-                  className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-            <button className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-all">
-              开始回测
-            </button>
-          </div>
-        </div>
-      )}
+    <div>
+      <CryptoBacktestTool />
     </div>
   );
 }
