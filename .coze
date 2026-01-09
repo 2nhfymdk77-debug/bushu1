@@ -11,3 +11,8 @@ deps = ["git"] # -> apt install git
 build = ["bash", ".cozeproj/scripts/deploy_build.sh"]
 run = ["bash", ".cozeproj/scripts/deploy_run.sh"]
 deps = ["git"] # -> apt install git
+
+[desktop]
+# 桌面应用构建配置
+build = ["pnpm", "electron:build"]
+description = "构建 Windows 桌面应用"
