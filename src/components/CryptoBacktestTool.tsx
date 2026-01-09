@@ -763,6 +763,7 @@ export default function CryptoBacktestTool() {
 
   // SMC 策略回测逻辑
   function runSMCBacktest(data15m: KLine[], data5m: KLine[], data1m: KLine[]): Trade[] {
+    console.log("runSMCBacktest 开始...");
     const smcStrategy = new SMCLiquidityFVGStrategy();
 
     // 转换数据格式
@@ -791,6 +792,8 @@ export default function CryptoBacktestTool() {
       volume: k.volume,
     }));
 
+    console.log("K线数据转换完成");
+
     // 对齐多时间框架
     const aligned = alignTimeframes(
       klineData15m,
@@ -800,6 +803,8 @@ export default function CryptoBacktestTool() {
       params.midTimeframe || "5m",
       params.lowTimeframe || "1m"
     );
+
+    console.log("多时间框架对齐完成");
 
     const trades: Trade[] = [];
     const tracker = new LiquidityFVGTracker();
@@ -828,80 +833,92 @@ export default function CryptoBacktestTool() {
       adxThreshold: params.adxThreshold || 20,
     };
 
-    // 处理所有K线
-    tracker.process(
-      klineData15m,
-      smcParams.liquidityLookback,
-      smcParams.liquidityTolerance
-    );
+    console.log("SMC 参数设置完成");
 
-    // 使用策略检测历史信号
-    const signals = smcStrategy.detectHistoricalSignals(klineData15m, smcParams);
-
-    for (const signalData of signals) {
-      const { signal, startIndex } = signalData;
-
-      // 检查是否可以入场
-      const canEnter = smcStrategy.checkBacktestEntry(
+    try {
+      // 处理所有K线
+      tracker.process(
         klineData15m,
-        startIndex,
-        signal,
-        smcParams
+        smcParams.liquidityLookback,
+        smcParams.liquidityTolerance
       );
 
-      if (canEnter) {
-        const exitResult = smcStrategy.calculateBacktestExit(
-          signal.entryPrice,
-          signal.direction,
+      console.log("Tracker 处理完成");
+
+      // 使用策略检测历史信号
+      const signals = smcStrategy.detectHistoricalSignals(klineData15m, smcParams);
+
+      console.log("检测到信号数量:", signals.length);
+
+      for (const signalData of signals) {
+        const { signal, startIndex } = signalData;
+
+        // 检查是否可以入场
+        const canEnter = smcStrategy.checkBacktestEntry(
           klineData15m,
           startIndex,
+          signal,
           smcParams
         );
 
-        const direction = signal.direction;
-        const positionSize = params.initialCapital * (params.maxPositionPercent / 100);
-        const quantity = positionSize / signal.entryPrice;
+        if (canEnter) {
+          const exitResult = smcStrategy.calculateBacktestExit(
+            signal.entryPrice,
+            signal.direction,
+            klineData15m,
+            startIndex,
+            smcParams
+          );
 
-        const grossPnl = direction === "long"
-          ? (exitResult.exitPrice - signal.entryPrice) / signal.entryPrice * 100
-          : (signal.entryPrice - exitResult.exitPrice) / signal.entryPrice * 100;
+          const direction = signal.direction;
+          const positionSize = params.initialCapital * (params.maxPositionPercent / 100);
+          const quantity = positionSize / signal.entryPrice;
 
-        const entryFee = positionSize * (params.takerFee / 100);
-        const exitFee = positionSize * (params.takerFee / 100);
-        const totalFee = entryFee + exitFee;
+          const grossPnl = direction === "long"
+            ? (exitResult.exitPrice - signal.entryPrice) / signal.entryPrice * 100
+            : (signal.entryPrice - exitResult.exitPrice) / signal.entryPrice * 100;
 
-        const grossPnlUsdt = positionSize * (grossPnl / 100);
-        const netPnlUsdt = grossPnlUsdt - totalFee;
+          const entryFee = positionSize * (params.takerFee / 100);
+          const exitFee = positionSize * (params.takerFee / 100);
+          const totalFee = entryFee + exitFee;
 
-        trades.push({
-          entryTime: signal.time,
-          exitTime: klineData15m[exitResult.exitIndex].timestamp,
-          direction,
-          entryPrice: signal.entryPrice,
-          exitPrice: exitResult.exitPrice,
-          stopLoss: direction === "long"
-            ? signal.entryPrice * (1 - smcParams.stopLossBuffer)
-            : signal.entryPrice * (1 + smcParams.stopLossBuffer),
-          takeProfit1: direction === "long"
-            ? signal.entryPrice * (1 + smcParams.takeProfitTP1 / 100)
-            : signal.entryPrice * (1 - smcParams.takeProfitTP1 / 100),
-          takeProfit2: direction === "long"
-            ? signal.entryPrice * (1 + smcParams.takeProfitTP2 / 100)
-            : signal.entryPrice * (1 - smcParams.takeProfitTP2 / 100),
-          pnl: grossPnl,
-          pnlPercent: grossPnl,
-          entryFee,
-          exitFee,
-          totalFee,
-          netPnl: netPnlUsdt,
-          positionSize,
-          quantity,
-          leverage: 1,
-          reason: exitResult.exitType === "stop_loss" ? "止损" : exitResult.exitType === "take_profit" ? "止盈" : "超时",
-        });
+          const grossPnlUsdt = positionSize * (grossPnl / 100);
+          const netPnlUsdt = grossPnlUsdt - totalFee;
+
+          trades.push({
+            entryTime: signal.time,
+            exitTime: klineData15m[exitResult.exitIndex].timestamp,
+            direction,
+            entryPrice: signal.entryPrice,
+            exitPrice: exitResult.exitPrice,
+            stopLoss: direction === "long"
+              ? signal.entryPrice * (1 - smcParams.stopLossBuffer)
+              : signal.entryPrice * (1 + smcParams.stopLossBuffer),
+            takeProfit1: direction === "long"
+              ? signal.entryPrice * (1 + smcParams.takeProfitTP1 / 100)
+              : signal.entryPrice * (1 - smcParams.takeProfitTP1 / 100),
+            takeProfit2: direction === "long"
+              ? signal.entryPrice * (1 + smcParams.takeProfitTP2 / 100)
+              : signal.entryPrice * (1 - smcParams.takeProfitTP2 / 100),
+            pnl: grossPnl,
+            pnlPercent: grossPnl,
+            entryFee,
+            exitFee,
+            totalFee,
+            netPnl: netPnlUsdt,
+            positionSize,
+            quantity,
+            leverage: 1,
+            reason: exitResult.exitType === "stop_loss" ? "止损" : exitResult.exitType === "take_profit" ? "止盈" : "超时",
+          });
+        }
       }
+    } catch (error) {
+      console.error("runSMCBacktest 错误:", error);
+      throw error;
     }
 
+    console.log("runSMCBacktest 完成，交易数量:", trades.length);
     return trades;
   }
 
@@ -918,8 +935,13 @@ export default function CryptoBacktestTool() {
 
     setTimeout(() => {
       try {
+        console.log("开始回测...");
+        console.log("K线数量:", data15m.length);
+
         // 执行 SMC 策略回测
         const trades = runSMCBacktest(data15m, data5m, data1m);
+
+        console.log("回测完成，交易数量:", trades.length);
 
         // 计算统计结果
         const winningTrades = trades.filter(t => t.pnl > 0);
