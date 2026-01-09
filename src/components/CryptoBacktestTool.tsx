@@ -64,8 +64,9 @@ export interface StrategyParams {
   rsiPeriod: number;
   volumePeriod: number;
   stopLossPercent: number;
-  riskReward1: number;
-  riskReward2: number;
+  stopLossPositionSize: number;
+  takeProfitPercent: number;
+  takeProfitPositionSize: number;
   leverage: number;
   riskPercent: number;
   minTrendDistance: number;
@@ -86,8 +87,9 @@ export const DEFAULT_PARAMS: StrategyParams = {
   rsiPeriod: 14,
   volumePeriod: 20,
   stopLossPercent: 0.4,
-  riskReward1: 1.5,
-  riskReward2: 2.5,
+  stopLossPositionSize: 100,
+  takeProfitPercent: 1.5,
+  takeProfitPositionSize: 100,
   leverage: 3,
   riskPercent: 2,
   minTrendDistance: 0.15,
@@ -107,21 +109,21 @@ const STRATEGIES = [
     name: "EMA趋势识别",
     description: "多时间框架策略：使用自定义周期EMA确认趋势方向，在小周期图中寻找回调进场点。结合RSI、成交量、K线颜色等多重过滤条件。",
     icon: "📈",
-    params: ["trendTimeframe", "entryTimeframe", "emaShort", "emaLong", "rsiPeriod", "volumePeriod", "stopLossPercent", "riskReward1", "riskReward2", "leverage", "minTrendDistance"]
+    params: ["trendTimeframe", "entryTimeframe", "emaShort", "emaLong", "rsiPeriod", "volumePeriod", "stopLossPercent", "stopLossPositionSize", "takeProfitPercent", "takeProfitPositionSize", "leverage", "minTrendDistance"]
   },
   {
     id: "rsi_reversal",
     name: "RSI超买超卖反转策略",
     description: "利用RSI指标识别超买超卖区域，捕捉价格反转机会。",
     icon: "🔄",
-    params: ["rsiPeriod", "stopLossPercent", "riskReward1", "riskReward2", "leverage"]
+    params: ["rsiPeriod", "stopLossPercent", "stopLossPositionSize", "takeProfitPercent", "takeProfitPositionSize", "leverage"]
   },
   {
     id: "breakout",
     name: "突破策略",
     description: "识别关键支撑阻力位的突破，捕捉趋势启动信号。",
     icon: "🚀",
-    params: ["volumePeriod", "stopLossPercent", "riskReward1", "riskReward2", "leverage"]
+    params: ["volumePeriod", "stopLossPercent", "stopLossPositionSize", "takeProfitPercent", "takeProfitPositionSize", "leverage"]
   }
 ];
 
@@ -310,27 +312,35 @@ export default function CryptoBacktestTool() {
                   className="w-full bg-gray-700 rounded px-3 py-2 text-white"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">止盈1R (倍数)</label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    value={params.riskReward1}
-                    onChange={(e) => setParams({ ...params, riskReward1: Number(e.target.value) })}
-                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">止盈2R (倍数)</label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    value={params.riskReward2}
-                    onChange={(e) => setParams({ ...params, riskReward2: Number(e.target.value) })}
-                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                  />
-                </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">止损仓位 (%)</label>
+                <input
+                  type="number"
+                  step="10"
+                  value={params.stopLossPositionSize}
+                  onChange={(e) => setParams({ ...params, stopLossPositionSize: Number(e.target.value) })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">止盈比例 (%)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={params.takeProfitPercent}
+                  onChange={(e) => setParams({ ...params, takeProfitPercent: Number(e.target.value) })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">止盈仓位 (%)</label>
+                <input
+                  type="number"
+                  step="10"
+                  value={params.takeProfitPositionSize}
+                  onChange={(e) => setParams({ ...params, takeProfitPositionSize: Number(e.target.value) })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                />
               </div>
               {currentStrategy?.params.includes("leverage") && (
                 <div>
@@ -970,13 +980,9 @@ export default function CryptoBacktestTool() {
               ? Math.min(current.low, klines5m[i - 1].low) * (1 - params.stopLossPercent / 100)
               : Math.max(current.high, klines5m[i - 1].high) * (1 + params.stopLossPercent / 100);
 
-            const riskAmount = Math.abs(entryPrice - stopLoss) / entryPrice * 100;
-            const takeProfit1 = type === "long"
-              ? entryPrice * (1 + riskAmount * params.riskReward1 / 100)
-              : entryPrice * (1 - riskAmount * params.riskReward1 / 100);
-            const takeProfit2 = type === "long"
-              ? entryPrice * (1 + riskAmount * params.riskReward2 / 100)
-              : entryPrice * (1 - riskAmount * params.riskReward2 / 100);
+            const takeProfit = type === "long"
+              ? entryPrice * (1 + params.takeProfitPercent / 100)
+              : entryPrice * (1 - params.takeProfitPercent / 100);
 
             const positionSize = params.initialCapital * (params.maxPositionPercent / 100);
             const quantity = positionSize / entryPrice;
@@ -988,8 +994,8 @@ export default function CryptoBacktestTool() {
               entryPrice,
               exitPrice: 0,
               stopLoss,
-              takeProfit1,
-              takeProfit2,
+              takeProfit1: takeProfit,
+              takeProfit2: 0,
               pnl: 0,
               pnlPercent: 0,
               entryFee: 0,

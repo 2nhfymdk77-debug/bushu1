@@ -43,6 +43,12 @@ export interface EMATrendPullbackParams extends BaseStrategyParams {
   emaTouchLookback: number;          // 回踩检测的K线数量
   minCandleChangePercent: number;   // 最小涨跌幅（%）
   minConditionsRequired: number;     // 进场需要满足的最少条件数
+
+  // 止损止盈参数
+  stopLossPercent: number;  // 止损比例（%）
+  stopLossPositionSize: number;  // 止损仓位（%）
+  takeProfitPercent: number;  // 止盈比例（%）
+  takeProfitPositionSize: number;  // 止盈仓位（%）
 }
 
 // 策略元信息
@@ -74,6 +80,10 @@ const DEFAULT_PARAMS: EMATrendPullbackParams = {
   emaTouchLookback: 3,
   minCandleChangePercent: 0.1,
   minConditionsRequired: 2,
+  stopLossPercent: 0.4,
+  stopLossPositionSize: 100,
+  takeProfitPercent: 1.5,
+  takeProfitPositionSize: 100,
 };
 
 /**
@@ -275,6 +285,52 @@ export class EMATrendPullbackStrategy implements TradingStrategy<EMATrendPullbac
         step: 1,
         description: "进场时最少需要满足的条件数量（1-4个）",
         category: "进场条件"
+      },
+
+      // 止损止盈参数
+      {
+        key: "stopLossPercent",
+        label: "止损比例 (%)",
+        type: "number",
+        defaultValue: DEFAULT_PARAMS.stopLossPercent,
+        min: 0.1,
+        max: 5,
+        step: 0.1,
+        description: "止损价格与进场价格的百分比距离",
+        category: "止损止盈"
+      },
+      {
+        key: "stopLossPositionSize",
+        label: "止损仓位 (%)",
+        type: "number",
+        defaultValue: DEFAULT_PARAMS.stopLossPositionSize,
+        min: 10,
+        max: 100,
+        step: 10,
+        description: "触达止损时平掉的仓位百分比",
+        category: "止损止盈"
+      },
+      {
+        key: "takeProfitPercent",
+        label: "止盈比例 (%)",
+        type: "number",
+        defaultValue: DEFAULT_PARAMS.takeProfitPercent,
+        min: 0.5,
+        max: 10,
+        step: 0.1,
+        description: "止盈价格与进场价格的百分比距离",
+        category: "止损止盈"
+      },
+      {
+        key: "takeProfitPositionSize",
+        label: "止盈仓位 (%)",
+        type: "number",
+        defaultValue: DEFAULT_PARAMS.takeProfitPositionSize,
+        min: 10,
+        max: 100,
+        step: 10,
+        description: "触达止盈时平掉的仓位百分比",
+        category: "止损止盈"
       },
     ];
   }
