@@ -4,6 +4,8 @@ import React, { useState } from "react";
 import CandlestickChart from "./CandlestickChart";
 import { EMATrendPullbackStrategy, EMATrendPullbackParams } from "../strategies/EMA15mTrend5mPullbackStrategy";
 import { SMCLiquidityFVGStrategy, SMCLiquidityFVGParams } from "../strategies/SMCLiquidityFVGStrategy";
+import { alignTimeframes, getMainBars, getMidBars, getLowBars, isMainBarUpdated } from "../utils/timeframeAligner";
+import { LiquidityFVGTracker } from "../utils/liquidityFVGTracker";
 
 // 类型定义
 interface KLine {
@@ -957,21 +959,452 @@ export default function CryptoBacktestTool() {
     return { data15m, data5m };
   }
 
+  // 生成 SMC 策略用的多时间框架数据
+  function generateMockDataSMC() {
+    const now = Date.now();
+    const data15m: KLine[] = [];
+    const data5m: KLine[] = [];
+    const data1m: KLine[] = [];
+
+    let price = 50000;
+    const volatility = 0.002;
+
+    // 生成15分钟数据
+    for (let i = 0; i < 960; i++) {  // 10天
+      const time = now - (960 - i) * 15 * 60 * 1000;
+      const change = (Math.random() - 0.48) * 2 * volatility * price;
+      const open = price;
+      const close = price + change;
+      const high = Math.max(open, close) + Math.random() * volatility * price;
+      const low = Math.min(open, close) - Math.random() * volatility * price;
+      const volume = Math.random() * 1000000000 + 500000000;
+
+      data15m.push({ timestamp: time, open, high, low, close, volume });
+      price = close;
+    }
+
+    // 生成5分钟数据
+    price = data15m[0].open;
+    for (let i = 0; i < 2880; i++) {
+      const time = now - (2880 - i) * 5 * 60 * 1000;
+      const change = (Math.random() - 0.48) * 2 * volatility * price;
+      const open = price;
+      const close = price + change;
+      const high = Math.max(open, close) + Math.random() * volatility * price * 0.5;
+      const low = Math.min(open, close) - Math.random() * volatility * price * 0.5;
+      const volume = Math.random() * 300000000 + 150000000;
+
+      data5m.push({ timestamp: time, open, high, low, close, volume });
+      price = close;
+    }
+
+    // 生成1分钟数据
+    price = data15m[0].open;
+    for (let i = 0; i < 14400; i++) {
+      const time = now - (14400 - i) * 1 * 60 * 1000;
+      const change = (Math.random() - 0.48) * 2 * volatility * price;
+      const open = price;
+      const close = price + change;
+      const high = Math.max(open, close) + Math.random() * volatility * price * 0.3;
+      const low = Math.min(open, close) - Math.random() * volatility * price * 0.3;
+      const volume = Math.random() * 100000000 + 50000000;
+
+      data1m.push({ timestamp: time, open, high, low, close, volume });
+      price = close;
+    }
+
+    setKlines15m(data15m);
+    setKlines5m(data5m);
+    return { data15m, data5m, data1m };
+  }
+
   function runBacktest() {
-    const { data15m, data5m } = generateMockData();
+    // 根据选择的策略生成不同的数据
+    let data15m, data5m, data1m;
+
+    if (selectedStrategy === "smc_liquidity_fvg") {
+      const generated = generateMockDataSMC();
+      data15m = generated.data15m;
+      data5m = generated.data5m;
+      data1m = generated.data1m;
+    } else {
+      const generated = generateMockData();
+      data15m = generated.data15m;
+      data5m = generated.data5m;
+      data1m = null;
+    }
 
     setTimeout(() => {
       try {
-        // 使用策略对象计算指标
+        let trades: Trade[] = [];
+
+        // 根据策略执行不同的回测逻辑
+        if (selectedStrategy === "smc_liquidity_fvg") {
+          trades = runSMCBacktest(data15m, data5m, data1m!);
+        } else {
+          trades = runEMABacktest(data15m, data5m);
+        }
+
+  // EMA 策略回测逻辑
+  function runEMABacktest(data15m: KLine[], data5m: KLine[]): Trade[] {
+    const klineData15m: any[] = data15m.map(k => ({
+      timestamp: k.timestamp,
+      open: k.open,
+      high: k.high,
+      low: k.low,
+      close: k.close,
+      volume: k.volume,
+    }));
+    const klineData5m: any[] = data5m.map(k => ({
+      timestamp: k.timestamp,
+      open: k.open,
+      high: k.high,
+      low: k.low,
+      close: k.close,
+      volume: k.volume,
+    }));
+
+    const emaShort15m = strategy.calculateEMA(klineData15m, params.emaShort || 20);
+    const emaLong15m = strategy.calculateEMA(klineData15m, params.emaLong || 60);
+    const volumeMA15m = strategy.calculateVolumeMA(klineData15m, params.volumePeriod || 20);
+    const emaShort5m = strategy.calculateEMA(klineData5m, params.emaShort || 20);
+    const emaLong5m = strategy.calculateEMA(klineData5m, params.emaLong || 60);
+    const rsi5m = strategy.calculateRSI(klineData5m, params.rsiPeriod || 14);
+
+    const trades: Trade[] = [];
+    let inPosition = false;
+    let currentPosition: Trade | null = null;
+
+    const get15mIndex = (k5: number): number => {
+      const time5 = data5m[k5].timestamp;
+      for (let i = 0; i < data15m.length; i++) {
+        if (data15m[i].timestamp > time5) return i - 1;
+      }
+      return data15m.length - 1;
+    };
+
+    for (let i = 1; i < data5m.length; i++) {
+      if (inPosition && currentPosition) {
+        const current = data5m[i];
+        const { stopLoss, takeProfit1, direction } = currentPosition;
+
+        let exitPrice = null;
+        let exitReason = "";
+
+        if (direction === "long") {
+          if (current.low <= stopLoss) {
+            exitPrice = stopLoss;
+            exitReason = "止损";
+          } else if (current.high >= takeProfit1) {
+            exitPrice = takeProfit1;
+            exitReason = "止盈";
+          }
+        } else {
+          if (current.high >= stopLoss) {
+            exitPrice = stopLoss;
+            exitReason = "止损";
+          } else if (current.low <= takeProfit1) {
+            exitPrice = takeProfit1;
+            exitReason = "止盈";
+          }
+        }
+
+        if (exitPrice) {
+          const entryPrice = currentPosition.entryPrice;
+          const direction = currentPosition.direction;
+          const leverage = params.leverageRequired || params.leverage || 3;
+
+          const positionSize = params.initialCapital * (params.maxPositionPercent / 100);
+          const quantity = positionSize / entryPrice;
+
+          const grossPnl = direction === "long"
+            ? (exitPrice - entryPrice) / entryPrice * 100 * leverage
+            : (entryPrice - exitPrice) / entryPrice * 100 * leverage;
+
+          const entryFee = positionSize * (params.takerFee / 100);
+          const exitFee = positionSize * (params.takerFee / 100);
+          const totalFee = entryFee + exitFee;
+
+          const grossPnlUsdt = positionSize * (grossPnl / 100);
+          const netPnlUsdt = grossPnlUsdt - totalFee;
+
+          const netPnlPercent = (netPnlUsdt / positionSize) * 100;
+
+          trades.push({
+            ...currentPosition,
+            exitTime: current.timestamp,
+            exitPrice,
+            pnl: grossPnl,
+            pnlPercent: grossPnl,
+            entryFee,
+            exitFee,
+            totalFee,
+            netPnl: netPnlUsdt,
+            positionSize,
+            quantity,
+            leverage,
+            reason: exitReason,
+          });
+
+          inPosition = false;
+          currentPosition = null;
+        }
+        continue;
+      }
+
+      const index15m = get15mIndex(i);
+      if (index15m < 0) continue;
+
+      const trendDirection = strategy.getTrendDirection(
+        klineData15m,
+        emaShort15m,
+        emaLong15m,
+        volumeMA15m,
+        {
+          emaShort: params.emaShort || 20,
+          emaLong: params.emaLong || 60,
+          minTrendDistance: params.minTrendDistance || 0.15,
+          trendTimeframe: params.trendTimeframe || "15m",
+          entryTimeframe: params.entryTimeframe || "5m",
+          rsiPeriod: params.rsiPeriod || 14,
+          rsiThreshold: 50,
+          volumePeriod: params.volumePeriod || 20,
+          enablePriceEMAFilter: true,
+          enableRSIFilter: true,
+          enableTouchedEmaFilter: true,
+          enableCandleColorFilter: true,
+          emaTouchLookback: 3,
+          minCandleChangePercent: 0.1,
+          minConditionsRequired: 2,
+          stopLossPercent: params.stopLossPercentRequired || params.stopLossPercent || 0.4,
+          stopLossPositionSize: params.stopLossPositionSize || 100,
+          takeProfitPercent: params.takeProfitPercentRequired || params.takeProfitPercent || 1.5,
+          takeProfitPositionSize: params.takeProfitPositionSize || 100,
+        }
+      );
+
+      if (trendDirection === "none") continue;
+
+      const entryResult = strategy.checkEntrySignal(
+        klineData5m,
+        trendDirection,
+        emaShort5m,
+        emaLong5m,
+        rsi5m,
+        {
+          emaShort: params.emaShort || 20,
+          emaLong: params.emaLong || 60,
+          minTrendDistance: params.minTrendDistance || 0.15,
+          trendTimeframe: params.trendTimeframe || "15m",
+          entryTimeframe: params.entryTimeframe || "5m",
+          rsiPeriod: params.rsiPeriod || 14,
+          rsiThreshold: 50,
+          volumePeriod: params.volumePeriod || 20,
+          enablePriceEMAFilter: true,
+          enableRSIFilter: true,
+          enableTouchedEmaFilter: true,
+          enableCandleColorFilter: true,
+          emaTouchLookback: 3,
+          minCandleChangePercent: 0.1,
+          minConditionsRequired: 2,
+          stopLossPercent: params.stopLossPercentRequired || params.stopLossPercent || 0.4,
+          stopLossPositionSize: params.stopLossPositionSize || 100,
+          takeProfitPercent: params.takeProfitPercentRequired || params.takeProfitPercent || 1.5,
+          takeProfitPositionSize: params.takeProfitPositionSize || 100,
+        }
+      );
+
+      if (entryResult.signal) {
+        const current = data5m[i];
+        const entryPrice = current.close;
+        const stopLossPercent = params.stopLossPercentRequired || params.stopLossPercent || 0.4;
+        const takeProfitPercent = params.takeProfitPercentRequired || params.takeProfitPercent || 1.5;
+
+        const stopLoss = entryResult.type === "long"
+          ? Math.min(current.low, data5m[i - 1].low) * (1 - stopLossPercent / 100)
+          : Math.max(current.high, data5m[i - 1].high) * (1 + stopLossPercent / 100);
+
+        const takeProfit = entryResult.type === "long"
+          ? entryPrice * (1 + takeProfitPercent / 100)
+          : entryPrice * (1 - takeProfitPercent / 100);
+
+        const positionSize = params.initialCapital * (params.maxPositionPercent / 100);
+        const quantity = positionSize / entryPrice;
+
+        currentPosition = {
+          entryTime: current.timestamp,
+          exitTime: 0,
+          direction: entryResult.type,
+          entryPrice,
+          exitPrice: 0,
+          stopLoss,
+          takeProfit1: takeProfit,
+          takeProfit2: 0,
+          pnl: 0,
+          pnlPercent: 0,
+          entryFee: 0,
+          exitFee: 0,
+          totalFee: 0,
+          netPnl: 0,
+          positionSize,
+          quantity,
+          leverage: params.leverageRequired || params.leverage || 3,
+          reason: entryResult.reason || "进场",
+        };
+
+        inPosition = true;
+      }
+    }
+
+    return trades;
+  }
+
+  // SMC 策略回测逻辑
+  function runSMCBacktest(data15m: KLine[], data5m: KLine[], data1m: KLine[]): Trade[] {
+    const smcStrategy = new SMCLiquidityFVGStrategy();
+
+    // 转换数据格式
+    const klineData15m: any[] = data15m.map(k => ({
+      timestamp: k.timestamp,
+      open: k.open,
+      high: k.high,
+      low: k.low,
+      close: k.close,
+      volume: k.volume,
+    }));
+    const klineData5m: any[] = data5m.map(k => ({
+      timestamp: k.timestamp,
+      open: k.open,
+      high: k.high,
+      low: k.low,
+      close: k.close,
+      volume: k.volume,
+    }));
+    const klineData1m: any[] = data1m.map(k => ({
+      timestamp: k.timestamp,
+      open: k.open,
+      high: k.high,
+      low: k.low,
+      close: k.close,
+      volume: k.volume,
+    }));
+
+    // 对齐多时间框架
+    const aligned = alignTimeframes(
+      klineData15m,
+      klineData5m,
+      klineData1m,
+      params.mainTimeframe || "15m",
+      params.midTimeframe || "5m",
+      params.lowTimeframe || "1m"
+    );
+
+    const trades: Trade[] = [];
+    const tracker = new LiquidityFVGTracker();
+    let inPosition = false;
+    let currentPosition: Trade | null = null;
+
+    const smcParams: SMCLiquidityFVGParams = {
+      mainTimeframe: params.mainTimeframe || "15m",
+      midTimeframe: params.midTimeframe || "5m",
+      lowTimeframe: params.lowTimeframe || "1m",
+      liquidityLookback: params.liquidityLookback || 20,
+      liquidityTolerance: params.liquidityTolerance || 0.05,
+      displacementThreshold: params.displacementThreshold || 1.5,
+      displacementMinBars: params.displacementMinBars || 3,
+      fvgMinSize: params.fvgMinSize || 0.01,
+      fvgMaxSize: params.fvgMaxSize || 0.5,
+      entryFVGPercent: params.entryFVGPercent || 0.5,
+      stopLossBuffer: params.stopLossBuffer || 0.01,
+      takeProfitTP1: params.takeProfitTP1 || 0.8,
+      takeProfitTP2: params.takeProfitTP2 || 1.5,
+      riskPercent: params.riskPercent || 1,
+      maxConsecutiveLosses: params.maxConsecutiveLosses || 3,
+      cooldownBars: params.cooldownBars || 20,
+      minVolumeRatio: params.minVolumeRatio || 1.2,
+      filterSideways: params.filterSideways !== undefined ? params.filterSideways : true,
+      adxThreshold: params.adxThreshold || 20,
+    };
+
+    // 处理所有K线
+    tracker.process(
+      klineData15m,
+      smcParams.liquidityLookback,
+      smcParams.liquidityTolerance
+    );
+
+    // 使用策略检测历史信号
+    const signals = smcStrategy.detectHistoricalSignals(klineData15m, smcParams);
+
+    for (const signalData of signals) {
+      const { signal, startIndex } = signalData;
+
+      // 检查是否可以入场
+      const canEnter = smcStrategy.checkBacktestEntry(
+        klineData15m,
+        startIndex,
+        signal,
+        smcParams
+      );
+
+      if (canEnter) {
+        const exitResult = smcStrategy.calculateBacktestExit(
+          signal.entryPrice,
+          signal.direction,
+          klineData15m,
+          startIndex,
+          smcParams
+        );
+
+        const direction = signal.direction;
+        const positionSize = params.initialCapital * (params.maxPositionPercent / 100);
+        const quantity = positionSize / signal.entryPrice;
+
+        const grossPnl = direction === "long"
+          ? (exitResult.exitPrice - signal.entryPrice) / signal.entryPrice * 100
+          : (signal.entryPrice - exitResult.exitPrice) / signal.entryPrice * 100;
+
+        const entryFee = positionSize * (params.takerFee / 100);
+        const exitFee = positionSize * (params.takerFee / 100);
+        const totalFee = entryFee + exitFee;
+
+        const grossPnlUsdt = positionSize * (grossPnl / 100);
+        const netPnlUsdt = grossPnlUsdt - totalFee;
+
+        trades.push({
+          entryTime: signal.time,
+          exitTime: klineData15m[exitResult.exitIndex].timestamp,
+          direction,
+          entryPrice: signal.entryPrice,
+          exitPrice: exitResult.exitPrice,
+          stopLoss: direction === "long"
+            ? signal.entryPrice * (1 - smcParams.stopLossBuffer)
+            : signal.entryPrice * (1 + smcParams.stopLossBuffer),
+          takeProfit1: direction === "long"
+            ? signal.entryPrice * (1 + smcParams.takeProfitTP1 / 100)
+            : signal.entryPrice * (1 - smcParams.takeProfitTP1 / 100),
+          takeProfit2: direction === "long"
+            ? signal.entryPrice * (1 + smcParams.takeProfitTP2 / 100)
+            : signal.entryPrice * (1 - smcParams.takeProfitTP2 / 100),
+          pnl: grossPnl,
+          pnlPercent: grossPnl,
+          entryFee,
+          exitFee,
+          totalFee,
+          netPnl: netPnlUsdt,
+          positionSize,
+          quantity,
+          leverage: 1,
+          reason: exitResult.exitType === "stop_loss" ? "止损" : exitResult.exitType === "take_profit" ? "止盈" : "超时",
+        });
+      }
+    }
+
+    return trades;
+  }
+
+        // 计算 EMA 指标用于图表显示
         const klineData15m: any[] = data15m.map(k => ({
-          timestamp: k.timestamp,
-          open: k.open,
-          high: k.high,
-          low: k.low,
-          close: k.close,
-          volume: k.volume,
-        }));
-        const klineData5m: any[] = data5m.map(k => ({
           timestamp: k.timestamp,
           open: k.open,
           high: k.high,
@@ -982,196 +1415,11 @@ export default function CryptoBacktestTool() {
 
         const emaShort15m = strategy.calculateEMA(klineData15m, params.emaShort || 20);
         const emaLong15m = strategy.calculateEMA(klineData15m, params.emaLong || 60);
-        const volumeMA15m = strategy.calculateVolumeMA(klineData15m, params.volumePeriod || 20);
-        const emaShort5m = strategy.calculateEMA(klineData5m, params.emaShort || 20);
-        const emaLong5m = strategy.calculateEMA(klineData5m, params.emaLong || 60);
-        const rsi5m = strategy.calculateRSI(klineData5m, params.rsiPeriod || 14);
 
-        const trades: Trade[] = [];
-        let inPosition = false;
-        let currentPosition: Trade | null = null;
+        setEmaShort15m(emaShort15m);
+        setEmaLong15m(emaLong15m);
 
-        const get15mIndex = (k5: number): number => {
-          const time5 = data5m[k5].timestamp;
-          for (let i = 0; i < data15m.length; i++) {
-            if (data15m[i].timestamp > time5) return i - 1;
-          }
-          return data15m.length - 1;
-        };
-
-        for (let i = 1; i < data5m.length; i++) {
-          if (inPosition && currentPosition) {
-            const current = data5m[i];
-            const { stopLoss, takeProfit1, direction } = currentPosition;
-
-            let exitPrice = null;
-            let exitReason = "";
-
-            if (direction === "long") {
-              if (current.low <= stopLoss) {
-                exitPrice = stopLoss;
-                exitReason = "止损";
-              } else if (current.high >= takeProfit1) {
-                exitPrice = takeProfit1;
-                exitReason = "止盈";
-              }
-            } else {
-              if (current.high >= stopLoss) {
-                exitPrice = stopLoss;
-                exitReason = "止损";
-              } else if (current.low <= takeProfit1) {
-                exitPrice = takeProfit1;
-                exitReason = "止盈";
-              }
-            }
-
-            if (exitPrice) {
-              const entryPrice = currentPosition.entryPrice;
-              const direction = currentPosition.direction;
-              const leverage = params.leverageRequired || params.leverage || 3;
-
-              const positionSize = params.initialCapital * (params.maxPositionPercent / 100);
-              const quantity = positionSize / entryPrice;
-
-              const grossPnl = direction === "long"
-                ? (exitPrice - entryPrice) / entryPrice * 100 * leverage
-                : (entryPrice - exitPrice) / entryPrice * 100 * leverage;
-
-              const entryFee = positionSize * (params.takerFee / 100);
-              const exitFee = positionSize * (params.takerFee / 100);
-              const totalFee = entryFee + exitFee;
-
-              const grossPnlUsdt = positionSize * (grossPnl / 100);
-              const netPnlUsdt = grossPnlUsdt - totalFee;
-
-              const netPnlPercent = (netPnlUsdt / positionSize) * 100;
-
-              trades.push({
-                ...currentPosition,
-                exitTime: current.timestamp,
-                exitPrice,
-                pnl: grossPnl,
-                pnlPercent: grossPnl,
-                entryFee,
-                exitFee,
-                totalFee,
-                netPnl: netPnlUsdt,
-                positionSize,
-                quantity,
-                leverage,
-                reason: exitReason,
-              });
-
-              inPosition = false;
-              currentPosition = null;
-            }
-            continue;
-          }
-
-          const index15m = get15mIndex(i);
-          if (index15m < 0) continue;
-
-          const trendDirection = strategy.getTrendDirection(
-            klineData15m,
-            emaShort15m,
-            emaLong15m,
-            volumeMA15m,
-            {
-              emaShort: params.emaShort || 20,
-              emaLong: params.emaLong || 60,
-              minTrendDistance: params.minTrendDistance || 0.15,
-              trendTimeframe: params.trendTimeframe || "15m",
-              entryTimeframe: params.entryTimeframe || "5m",
-              rsiPeriod: params.rsiPeriod || 14,
-              rsiThreshold: 50,
-              volumePeriod: params.volumePeriod || 20,
-              enablePriceEMAFilter: true,
-              enableRSIFilter: true,
-              enableTouchedEmaFilter: true,
-              enableCandleColorFilter: true,
-              emaTouchLookback: 3,
-              minCandleChangePercent: 0.1,
-              minConditionsRequired: 2,
-              stopLossPercent: params.stopLossPercentRequired || params.stopLossPercent || 0.4,
-              stopLossPositionSize: params.stopLossPositionSize || 100,
-              takeProfitPercent: params.takeProfitPercentRequired || params.takeProfitPercent || 1.5,
-              takeProfitPositionSize: params.takeProfitPositionSize || 100,
-            }
-          );
-
-          if (trendDirection === "none") continue;
-
-          const entryResult = strategy.checkEntrySignal(
-            klineData5m,
-            trendDirection,
-            emaShort5m,
-            emaLong5m,
-            rsi5m,
-            {
-              emaShort: params.emaShort || 20,
-              emaLong: params.emaLong || 60,
-              minTrendDistance: params.minTrendDistance || 0.15,
-              trendTimeframe: params.trendTimeframe || "15m",
-              entryTimeframe: params.entryTimeframe || "5m",
-              rsiPeriod: params.rsiPeriod || 14,
-              rsiThreshold: 50,
-              volumePeriod: params.volumePeriod || 20,
-              enablePriceEMAFilter: true,
-              enableRSIFilter: true,
-              enableTouchedEmaFilter: true,
-              enableCandleColorFilter: true,
-              emaTouchLookback: 3,
-              minCandleChangePercent: 0.1,
-              minConditionsRequired: 2,
-              stopLossPercent: params.stopLossPercentRequired || params.stopLossPercent || 0.4,
-              stopLossPositionSize: params.stopLossPositionSize || 100,
-              takeProfitPercent: params.takeProfitPercentRequired || params.takeProfitPercent || 1.5,
-              takeProfitPositionSize: params.takeProfitPositionSize || 100,
-            }
-          );
-
-          if (entryResult.signal) {
-            const current = data5m[i];
-            const entryPrice = current.close;
-            const stopLossPercent = params.stopLossPercentRequired || params.stopLossPercent || 0.4;
-            const takeProfitPercent = params.takeProfitPercentRequired || params.takeProfitPercent || 1.5;
-
-            const stopLoss = entryResult.type === "long"
-              ? Math.min(current.low, data5m[i - 1].low) * (1 - stopLossPercent / 100)
-              : Math.max(current.high, data5m[i - 1].high) * (1 + stopLossPercent / 100);
-
-            const takeProfit = entryResult.type === "long"
-              ? entryPrice * (1 + takeProfitPercent / 100)
-              : entryPrice * (1 - takeProfitPercent / 100);
-
-            const positionSize = params.initialCapital * (params.maxPositionPercent / 100);
-            const quantity = positionSize / entryPrice;
-
-            currentPosition = {
-              entryTime: current.timestamp,
-              exitTime: 0,
-              direction: entryResult.type,
-              entryPrice,
-              exitPrice: 0,
-              stopLoss,
-              takeProfit1: takeProfit,
-              takeProfit2: 0,
-              pnl: 0,
-              pnlPercent: 0,
-              entryFee: 0,
-              exitFee: 0,
-              totalFee: 0,
-              netPnl: 0,
-              positionSize,
-              quantity,
-              leverage: params.leverageRequired || params.leverage || 3,
-              reason: entryResult.reason || "进场",
-            };
-
-            inPosition = true;
-          }
-        }
-
+        // 计算统计结果
         const winningTrades = trades.filter(t => t.pnl > 0);
         const losingTrades = trades.filter(t => t.pnl <= 0);
 
@@ -1210,9 +1458,6 @@ export default function CryptoBacktestTool() {
         }
 
         const finalCapital = params.initialCapital + netProfitUsdt;
-
-        setEmaShort15m(emaShort15m);
-        setEmaLong15m(emaLong15m);
 
         setResult({
           totalTrades: trades.length,
