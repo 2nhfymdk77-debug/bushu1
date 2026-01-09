@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 
 // 类型定义
 type TaskStatus = "idle" | "running" | "paused" | "stopped" | "error";
@@ -37,6 +37,13 @@ interface Log {
   taskId?: string;
 }
 
+interface AccountInfo {
+  available: number;
+  wallet: number;
+  unrealizedPnl: number;
+  totalPositionMargin: number;
+}
+
 export interface TradingParams {
   emaShort: number;
   emaLong: number;
@@ -51,7 +58,7 @@ export interface TradingParams {
   initialCapital: number;
   maxPositionPercent: number;
   symbols: string;
-  scanInterval: number; // 扫描间隔（秒）
+  scanInterval: number;
 }
 
 export const DEFAULT_TRADING_PARAMS: TradingParams = {
@@ -68,10 +75,9 @@ export const DEFAULT_TRADING_PARAMS: TradingParams = {
   initialCapital: 10000,
   maxPositionPercent: 30,
   symbols: "BTCUSDT,ETHUSDT",
-  scanInterval: 5, // 默认5秒扫描一次
+  scanInterval: 5,
 };
 
-// 策略定义（与回测一致）
 const STRATEGIES = [
   {
     id: "ema_trend_pullback",
@@ -110,13 +116,367 @@ export default function TradingMonitor({ isMobile = false }: TradingMonitorProps
   const [selectedTaskId, setSelectedTaskId] = useState<string>("");
   const [showInterventionModal, setShowInterventionModal] = useState(false);
 
-  // 获取当前策略
+  // API密钥和账户信息
+  const [apiKey, setApiKey] = useState("");
+  const [apiSecret, setApiSecret] = useState("");
+  const [accountInfo, setAccountInfo] = useState<AccountInfo | null>(null);
+  const [isConnecting, setIsConnecting] = useState(false);
+
+  // 定时扫描引用
+  const scanIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 从localStorage加载API密钥
+  useEffect(() => {
+    const storedApiKey = localStorage.getItem("binance_api_key");
+    const storedApiSecret = localStorage.getItem("binance_api_secret");
+    if (storedApiKey && storedApiSecret) {
+      setApiKey(storedApiKey);
+      setApiSecret(storedApiSecret);
+      connectToAccount(storedApiKey, storedApiSecret);
+    }
+  }, []);
+
+  // 清理定时器
+  useEffect(() => {
+    return () => {
+      if (scanIntervalRef.current) {
+        clearInterval(scanIntervalRef.current);
+      }
+    };
+  }, []);
+
   const currentStrategy = STRATEGIES.find(s => s.id === selectedStrategy);
+
+  // 连接账户并获取余额
+  const connectToAccount = async (key: string, secret: string) => {
+    setIsConnecting(true);
+    try {
+      const response = await fetch("/api/binance/account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: key, apiSecret: secret }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "连接失败");
+      }
+
+      const data = await response.json();
+      setAccountInfo(data);
+
+      // 保存到localStorage
+      localStorage.setItem("binance_api_key", key);
+      localStorage.setItem("binance_api_secret", secret);
+
+      addLog("success", "成功连接币安账户，余额已更新");
+    } catch (error: any) {
+      addLog("error", `连接失败: ${error.message}`);
+      setAccountInfo(null);
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+
+  // 扫描所有交易对的信号
+  const scanSymbols = async (taskId: string, taskStrategyId: string, taskParams: TradingParams) => {
+    try {
+      const symbols = taskParams.symbols.split(",").map(s => s.trim()).filter(s => s);
+      const response = await fetch("/api/trading/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey,
+          apiSecret,
+          strategyId: taskStrategyId,
+          symbols,
+          params: taskParams,
+          interval: "15m",
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("扫描失败");
+      }
+
+      const result = await response.json();
+
+      // 更新任务统计
+      setTasks(prev => prev.map(task => {
+        if (task.id === taskId) {
+          return {
+            ...task,
+            totalSignals: task.totalSignals + result.data.signalCount,
+            lastUpdateTime: Date.now(),
+          };
+        }
+        return task;
+      }));
+
+      // 处理找到的信号
+      if (result.data.results && result.data.results.length > 0) {
+        for (const item of result.data.results) {
+          if (item.signal) {
+            addLog("info", `发现信号: ${item.symbol} ${item.signal.direction} - ${item.signal.reason}`, taskId);
+            setSignals(prev => [{
+              ...item.signal,
+              executed: false,
+            }, ...prev].slice(0, 50));
+
+            // 自动执行交易
+            await executeOrder(taskId, item.signal, taskParams);
+          }
+        }
+      }
+
+      if (result.data.errors && result.data.errors.length > 0) {
+        result.data.errors.forEach((err: any) => {
+          addLog("warn", `${err.symbol} 扫描失败: ${err.error}`, taskId);
+        });
+      }
+
+    } catch (error: any) {
+      addLog("error", `扫描失败: ${error.message}`, taskId);
+    }
+  };
+
+  // 执行订单
+  const executeOrder = async (taskId: string, signal: Signal, taskParams: TradingParams) => {
+    try {
+      // 计算仓位大小
+      const accountBalance = accountInfo?.available || 10000;
+      const positionSize = (accountBalance * (taskParams.maxPositionPercent / 100)) * taskParams.leverage;
+
+      const side = signal.direction === "long" ? "BUY" : "SELL";
+      const positionSide = signal.direction === "long" ? "LONG" : "SHORT";
+
+      const response = await fetch("/api/trading/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey,
+          apiSecret,
+          symbol: signal.symbol,
+          side,
+          positionSide,
+          quantity: positionSize.toFixed(3),
+          type: "MARKET",
+          leverage: taskParams.leverage,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "下单失败");
+      }
+
+      const result = await response.json();
+
+      // 更新任务统计
+      setTasks(prev => prev.map(task => {
+        if (task.id === taskId) {
+          return {
+            ...task,
+            executedTrades: task.executedTrades + 1,
+          };
+        }
+        return task;
+      }));
+
+      // 更新信号状态
+      setSignals(prev => prev.map(s => {
+        if (s.symbol === signal.symbol && s.time === signal.time) {
+          return { ...s, executed: true };
+        }
+        return s;
+      }));
+
+      addLog("success", `订单已执行: ${signal.symbol} ${side} ${positionSize.toFixed(3)} @ ${signal.price}`, taskId);
+
+    } catch (error: any) {
+      addLog("error", `执行订单失败: ${error.message}`, taskId);
+
+      setTasks(prev => prev.map(task => {
+        if (task.id === taskId) {
+          return {
+            ...task,
+            failedTrades: task.failedTrades + 1,
+          };
+        }
+        return task;
+      }));
+    }
+  };
+
+  // 启动自动交易任务
+  const startTask = () => {
+    const newTask: Task = {
+      id: `task-${Date.now()}`,
+      name: `${currentStrategy?.name}`,
+      strategyName: currentStrategy?.name || "",
+      symbols: params.symbols.split(",").map(s => s.trim()).filter(s => s),
+      status: "running",
+      totalSignals: 0,
+      executedTrades: 0,
+      skippedTrades: 0,
+      failedTrades: 0,
+      netProfit: 0,
+      winRate: 0,
+      riskStatus: "normal",
+      lastUpdateTime: Date.now(),
+    };
+
+    setTasks(prev => [...prev, newTask]);
+    setSelectedTaskId(newTask.id);
+    setStep(3);
+    addLog("success", `任务 "${newTask.name}" 已启动`, newTask.id);
+
+    // 开始定时扫描
+    startScan(newTask.id, selectedStrategy, params);
+  };
+
+  // 开始定时扫描
+  const startScan = (taskId: string, strategyId: string, taskParams: TradingParams) => {
+    // 立即执行一次
+    scanSymbols(taskId, strategyId, taskParams);
+
+    // 设置定时扫描
+    if (scanIntervalRef.current) {
+      clearInterval(scanIntervalRef.current);
+    }
+
+    scanIntervalRef.current = setInterval(() => {
+      const task = tasks.find(t => t.id === taskId);
+      if (task && task.status === "running") {
+        scanSymbols(taskId, strategyId, taskParams);
+      }
+    }, taskParams.scanInterval * 1000);
+  };
+
+  // 停止任务
+  const stopTask = (taskId: string) => {
+    if (scanIntervalRef.current) {
+      clearInterval(scanIntervalRef.current);
+      scanIntervalRef.current = null;
+    }
+
+    setTasks(prev => prev.map(task => {
+      if (task.id === taskId) {
+        return { ...task, status: "stopped" as TaskStatus };
+      }
+      return task;
+    }));
+
+    addLog("info", `任务已停止`, taskId);
+  };
+
+  // 添加日志
+  const addLog = (level: Log["level"], message: string, taskId?: string) => {
+    setLogs(prev => [
+      {
+        time: Date.now(),
+        level,
+        message,
+        taskId,
+      },
+      ...prev,
+    ].slice(0, 100));
+  };
+
+  // 步骤1：API连接
+  if (step === 1 && (!accountInfo || !apiKey)) {
+    return (
+      <div className="animate-fadeIn">
+        <div className="text-center mb-8">
+          <h2 className="text-2xl font-bold mb-2">连接币安账户</h2>
+          <p className="text-gray-400">输入您的币安API密钥以开始自动交易</p>
+        </div>
+
+        <div className="max-w-md mx-auto bg-gray-800 rounded-lg p-6 mb-6">
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm text-gray-400 mb-2">API Key</label>
+              <input
+                type="text"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="输入您的API Key"
+                className="w-full bg-gray-700 rounded px-4 py-3 text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-400 mb-2">API Secret</label>
+              <input
+                type="password"
+                value={apiSecret}
+                onChange={(e) => setApiSecret(e.target.value)}
+                placeholder="输入您的API Secret"
+                className="w-full bg-gray-700 rounded px-4 py-3 text-white"
+              />
+            </div>
+            <button
+              onClick={() => connectToAccount(apiKey, apiSecret)}
+              disabled={isConnecting || !apiKey || !apiSecret}
+              className={`w-full py-3 rounded-lg font-medium transition-all ${
+                isConnecting || !apiKey || !apiSecret
+                  ? "bg-gray-600 cursor-not-allowed"
+                  : "bg-blue-600 hover:bg-blue-700"
+              }`}
+            >
+              {isConnecting ? "连接中..." : "连接账户"}
+            </button>
+          </div>
+        </div>
+
+        <p className="text-center text-sm text-gray-500">
+          🔒 您的API密钥仅存储在浏览器本地，不会上传到服务器
+        </p>
+      </div>
+    );
+  }
 
   // 步骤1：选择策略
   if (step === 1) {
     return (
       <div className="animate-fadeIn">
+        {/* 账户信息卡片 */}
+        {accountInfo && (
+          <div className="bg-gray-800 rounded-lg p-6 mb-8 border border-green-500/30">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-lg flex items-center">
+                <span className="text-green-500 mr-2">✓</span>
+                账户已连接
+              </h3>
+              <button
+                onClick={() => connectToAccount(apiKey, apiSecret)}
+                className="text-sm text-blue-400 hover:text-blue-300"
+              >
+                刷新余额
+              </button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <div className="text-xs text-gray-400">可用余额</div>
+                <div className="text-xl font-bold text-white">{accountInfo.available.toFixed(2)} USDT</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-400">总钱包余额</div>
+                <div className="text-xl font-bold text-white">{accountInfo.wallet.toFixed(2)} USDT</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-400">未实现盈亏</div>
+                <div className={`text-xl font-bold ${accountInfo.unrealizedPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  {accountInfo.unrealizedPnl >= 0 ? "+" : ""}{accountInfo.unrealizedPnl.toFixed(2)} USDT
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-400">持仓保证金</div>
+                <div className="text-xl font-bold text-white">{accountInfo.totalPositionMargin.toFixed(2)} USDT</div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="text-center mb-8">
           <h2 className="text-2xl font-bold mb-2">选择自动交易策略</h2>
           <p className="text-gray-400">选择一个策略开始自动交易</p>
@@ -362,7 +722,7 @@ export default function TradingMonitor({ isMobile = false }: TradingMonitorProps
             重置参数
           </button>
           <button
-            onClick={handleStartTask}
+            onClick={startTask}
             className="px-8 py-3 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-all"
           >
             🚀 启动自动交易
@@ -386,6 +746,32 @@ export default function TradingMonitor({ isMobile = false }: TradingMonitorProps
         <p className="text-gray-400">实时监控和管理自动交易任务</p>
       </div>
 
+      {/* 账户信息 */}
+      {accountInfo && (
+        <div className="bg-gray-800 rounded-lg p-4 mb-6 border border-gray-700">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div>
+              <div className="text-xs text-gray-400">可用余额</div>
+              <div className="font-semibold text-white">{accountInfo.available.toFixed(2)} USDT</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-400">总余额</div>
+              <div className="font-semibold text-white">{accountInfo.wallet.toFixed(2)} USDT</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-400">未实现盈亏</div>
+              <div className={`font-semibold ${accountInfo.unrealizedPnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+                {accountInfo.unrealizedPnl >= 0 ? "+" : ""}{accountInfo.unrealizedPnl.toFixed(2)} USDT
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-400">持仓保证金</div>
+              <div className="font-semibold text-white">{accountInfo.totalPositionMargin.toFixed(2)} USDT</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 全局操作按钮 */}
       <div className="flex flex-wrap gap-3 mb-6">
         <button
@@ -397,7 +783,10 @@ export default function TradingMonitor({ isMobile = false }: TradingMonitorProps
           </svg>
           <span>紧急停止</span>
         </button>
-        <button className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-all">
+        <button
+          onClick={() => setStep(1)}
+          className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-all"
+        >
           新建任务
         </button>
       </div>
@@ -428,7 +817,7 @@ export default function TradingMonitor({ isMobile = false }: TradingMonitorProps
                 task={task}
                 selected={selectedTaskId === task.id}
                 onSelect={setSelectedTaskId}
-                onAction={handleTaskAction}
+                onStop={() => stopTask(task.id)}
               />
             ))}
           </div>
@@ -439,87 +828,22 @@ export default function TradingMonitor({ isMobile = false }: TradingMonitorProps
       {selectedTaskId && tasks.find(t => t.id === selectedTaskId) && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <SignalList signals={signals} />
-          <LogList logs={logs} />
+          <LogList logs={logs} taskId={selectedTaskId} />
         </div>
       )}
 
       {/* 紧急停止模态框 */}
       {showInterventionModal && (
         <EmergencyStopModal
-          onConfirm={handleEmergencyStop}
+          onConfirm={() => {
+            tasks.forEach(task => stopTask(task.id));
+            setShowInterventionModal(false);
+          }}
           onCancel={() => setShowInterventionModal(false)}
         />
       )}
     </div>
   );
-
-  // 启动任务
-  function handleStartTask() {
-    const newTask: Task = {
-      id: `task-${Date.now()}`,
-      name: `${currentStrategy?.name}`,
-      strategyName: currentStrategy?.name || "",
-      symbols: params.symbols.split(",").map(s => s.trim()).filter(s => s),
-      status: "running",
-      totalSignals: 0,
-      executedTrades: 0,
-      skippedTrades: 0,
-      failedTrades: 0,
-      netProfit: 0,
-      winRate: 0,
-      riskStatus: "normal",
-      lastUpdateTime: Date.now(),
-    };
-
-    setTasks(prev => [...prev, newTask]);
-    setSelectedTaskId(newTask.id);
-    setStep(3);
-
-    // 添加日志
-    addLog("success", `任务 "${newTask.name}" 已启动`, newTask.id);
-  }
-
-  // 任务操作
-  function handleTaskAction(taskId: string, action: string) {
-    setTasks(prev => prev.map(task => {
-      if (task.id === taskId) {
-        let newStatus = task.status;
-        if (action === "start") newStatus = "running";
-        if (action === "pause") newStatus = "paused";
-        if (action === "stop") newStatus = "stopped";
-
-        if (newStatus !== task.status) {
-          addLog("info", `任务 "${task.name}" ${action === "start" ? "已恢复" : action === "pause" ? "已暂停" : "已停止"}`, taskId);
-        }
-
-        return { ...task, status: newStatus as TaskStatus };
-      }
-      return task;
-    }));
-  }
-
-  // 紧急停止
-  function handleEmergencyStop() {
-    setTasks(prev => prev.map(task => ({
-      ...task,
-      status: "stopped" as TaskStatus,
-    })));
-    addLog("error", "已紧急停止所有任务");
-    setShowInterventionModal(false);
-  }
-
-  // 添加日志
-  function addLog(level: Log["level"], message: string, taskId?: string) {
-    setLogs(prev => [
-      {
-        time: Date.now(),
-        level,
-        message,
-        taskId,
-      },
-      ...prev,
-    ].slice(0, 50)); // 保留最近50条
-  }
 }
 
 // 任务卡片组件
@@ -527,12 +851,12 @@ function TaskCard({
   task,
   selected,
   onSelect,
-  onAction,
+  onStop,
 }: {
   task: Task;
   selected: boolean;
   onSelect: (id: string) => void;
-  onAction: (id: string, action: string) => void;
+  onStop: (id: string) => void;
 }) {
   const statusStyles = {
     idle: "bg-gray-500/20 text-gray-400 border-gray-500/30",
@@ -583,10 +907,8 @@ function TaskCard({
             <div className="font-semibold">{task.executedTrades}</div>
           </div>
           <div>
-            <div className="text-gray-400 text-xs">胜率</div>
-            <div className={`font-semibold ${task.winRate >= 60 ? "text-green-400" : "text-red-400"}`}>
-              {task.winRate.toFixed(1)}%
-            </div>
+            <div className="text-gray-400 text-xs">失败</div>
+            <div className="font-semibold text-red-400">{task.failedTrades}</div>
           </div>
           <div className="hidden md:block">
             <div className="text-gray-400 text-xs">净收益</div>
@@ -595,54 +917,24 @@ function TaskCard({
             </div>
           </div>
           <div className="hidden md:block">
-            <div className="text-gray-400 text-xs">风险状态</div>
-            <div className={`font-semibold ${
-              task.riskStatus === "normal" ? "text-green-400" :
-              task.riskStatus === "warning" ? "text-yellow-400" : "text-red-400"
-            }`}>
-              {task.riskStatus === "normal" ? "正常" :
-               task.riskStatus === "warning" ? "警告" : "严重"}
+            <div className="text-gray-400 text-xs">最后更新</div>
+            <div className="font-semibold text-xs">
+              {new Date(task.lastUpdateTime).toLocaleTimeString()}
             </div>
           </div>
         </div>
 
-        <div className="flex items-center space-x-2">
-          {task.status === "running" && (
-            <>
-              <button
-                onClick={(e) => { e.stopPropagation(); onAction(task.id, "pause"); }}
-                className="p-2 bg-yellow-600 hover:bg-yellow-700 rounded-lg transition-colors"
-                title="暂停"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9v6m4-6v6" />
-                </svg>
-              </button>
-              <button
-                onClick={(e) => { e.stopPropagation(); onAction(task.id, "stop"); }}
-                className="p-2 bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
-                title="停止"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
-                </svg>
-              </button>
-            </>
-          )}
-          {task.status === "paused" && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onAction(task.id, "start"); }}
-              className="p-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
-              title="恢复"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </button>
-          )}
-        </div>
+        {task.status === "running" && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onStop(task.id);
+            }}
+            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-all text-sm"
+          >
+            停止
+          </button>
+        )}
       </div>
     </div>
   );
@@ -650,103 +942,93 @@ function TaskCard({
 
 // 信号列表组件
 function SignalList({ signals }: { signals: Signal[] }) {
-  if (signals.length === 0) {
-    return (
-      <div className="bg-gray-800 rounded-xl overflow-hidden border border-gray-700">
-        <div className="px-6 py-4 border-b border-gray-700">
-          <h3 className="font-semibold text-lg">最新信号</h3>
-        </div>
-        <div className="p-8 text-center text-gray-400">暂无信号</div>
-      </div>
-    );
-  }
-
   return (
     <div className="bg-gray-800 rounded-xl overflow-hidden border border-gray-700">
-      <div className="px-6 py-4 border-b border-gray-700 flex items-center justify-between">
-        <h3 className="font-semibold text-lg">最新信号</h3>
-        <span className="text-sm text-gray-400">最近20条</span>
+      <div className="px-6 py-4 border-b border-gray-700">
+        <h3 className="font-semibold text-lg">交易信号</h3>
       </div>
-      <div className="divide-y divide-gray-700 max-h-96 overflow-y-auto">
-        {signals.slice(0, 20).map((signal, index) => (
-          <div key={index} className="p-4">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center space-x-2">
-                <span className="font-medium">{signal.symbol}</span>
-                <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                  signal.direction === "long"
-                    ? "bg-green-500/20 text-green-400"
-                    : "bg-red-500/20 text-red-400"
-                }`}>
-                  {signal.direction === "long" ? "做多" : "做空"}
-                </span>
-                {signal.executed && (
-                  <span className="px-2 py-0.5 rounded text-xs font-medium bg-blue-500/20 text-blue-400">
-                    已执行
+      <div className="p-4 max-h-96 overflow-y-auto">
+        {signals.length === 0 ? (
+          <div className="text-center text-gray-400 py-8">暂无信号</div>
+        ) : (
+          <div className="space-y-3">
+            {signals.map((signal, index) => (
+              <div
+                key={index}
+                className={`p-3 rounded-lg border ${
+                  signal.executed
+                    ? "bg-green-500/10 border-green-500/30"
+                    : "bg-gray-700/50 border-gray-600"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-semibold">{signal.symbol}</span>
+                  <span className={`px-2 py-1 rounded text-xs font-medium ${
+                    signal.direction === "long"
+                      ? "bg-green-500/20 text-green-400"
+                      : "bg-red-500/20 text-red-400"
+                  }`}>
+                    {signal.direction.toUpperCase()}
                   </span>
+                </div>
+                <div className="text-sm text-gray-400 mb-1">
+                  价格: ${signal.price.toFixed(2)}
+                </div>
+                <div className="text-xs text-gray-500 mb-2">
+                  {signal.reason}
+                </div>
+                {signal.executed && (
+                  <div className="text-xs text-green-400">✓ 已执行</div>
                 )}
               </div>
-              <span className="text-sm text-gray-400">
-                ${signal.price.toLocaleString()}
-              </span>
-            </div>
-            <div className="text-sm text-gray-400">{signal.reason}</div>
-            <div className="text-xs text-gray-500 mt-1">
-              {new Date(signal.time).toLocaleString()}
-            </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
     </div>
   );
 }
 
 // 日志列表组件
-function LogList({ logs }: { logs: Log[] }) {
-  const logLevelColors = {
+function LogList({ logs, taskId }: { logs: Log[]; taskId: string }) {
+  const filteredLogs = logs.filter(log => !taskId || log.taskId === taskId || !log.taskId);
+
+  const levelColors = {
     info: "text-blue-400",
     warn: "text-yellow-400",
     error: "text-red-400",
     success: "text-green-400",
   };
 
-  if (logs.length === 0) {
-    return (
-      <div className="bg-gray-800 rounded-xl overflow-hidden border border-gray-700">
-        <div className="px-6 py-4 border-b border-gray-700">
-          <h3 className="font-semibold text-lg">实时日志</h3>
-        </div>
-        <div className="p-8 text-center text-gray-400">暂无日志</div>
-      </div>
-    );
-  }
-
   return (
     <div className="bg-gray-800 rounded-xl overflow-hidden border border-gray-700">
-      <div className="px-6 py-4 border-b border-gray-700 flex items-center justify-between">
-        <h3 className="font-semibold text-lg">实时日志</h3>
-        <span className="text-sm text-gray-400">最近20条</span>
+      <div className="px-6 py-4 border-b border-gray-700">
+        <h3 className="font-semibold text-lg">运行日志</h3>
       </div>
-      <div className="divide-y divide-gray-700 max-h-96 overflow-y-auto">
-        {logs.slice(0, 20).map((log, index) => (
-          <div key={index} className="p-4">
-            <div className="flex items-start space-x-3">
-              <span className={`text-xs font-medium ${logLevelColors[log.level]}`}>
-                {log.level.toUpperCase()}
-              </span>
-              <div className="flex-1 text-sm">{log.message}</div>
-              <span className="text-xs text-gray-500">
-                {new Date(log.time).toLocaleTimeString()}
-              </span>
-            </div>
+      <div className="p-4 max-h-96 overflow-y-auto font-mono text-xs">
+        {filteredLogs.length === 0 ? (
+          <div className="text-center text-gray-400 py-8">暂无日志</div>
+        ) : (
+          <div className="space-y-2">
+            {filteredLogs.map((log, index) => (
+              <div key={index} className="flex gap-2">
+                <span className="text-gray-500">
+                  {new Date(log.time).toLocaleTimeString()}
+                </span>
+                <span className={levelColors[log.level]}>
+                  [{log.level.toUpperCase()}]
+                </span>
+                <span className="text-gray-300">{log.message}</span>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
     </div>
   );
 }
 
-// 紧急停止模态框
+// 紧急停止模态框组件
 function EmergencyStopModal({
   onConfirm,
   onCancel,
@@ -755,32 +1037,29 @@ function EmergencyStopModal({
   onCancel: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-      <div className="bg-gray-800 rounded-xl p-6 max-w-md w-full mx-4 border border-gray-700">
-        <h3 className="text-xl font-bold mb-4 flex items-center space-x-2">
-          <span className="text-red-500">⚠️</span>
-          <span>紧急停止确认</span>
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-gray-800 rounded-xl p-6 max-w-md w-full">
+        <h3 className="text-xl font-bold mb-4 flex items-center text-red-400">
+          <svg className="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          紧急停止所有任务
         </h3>
-        <p className="text-gray-300 mb-6">
-          您即将紧急停止所有交易任务。此操作将：
+        <p className="text-gray-400 mb-6">
+          您确定要停止所有正在运行的自动交易任务吗？此操作将立即停止所有扫描和交易执行。
         </p>
-        <ul className="list-disc list-inside text-gray-300 mb-6 space-y-2">
-          <li>立即停止所有正在运行的任务</li>
-          <li>取消所有未执行的挂单</li>
-          <li>保留当前持仓，不会强制平仓</li>
-        </ul>
-        <div className="flex space-x-3">
-          <button
-            onClick={onConfirm}
-            className="flex-1 py-3 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-all"
-          >
-            确认紧急停止
-          </button>
+        <div className="flex gap-3">
           <button
             onClick={onCancel}
-            className="flex-1 py-3 bg-gray-700 hover:bg-gray-600 text-white font-medium rounded-lg transition-all"
+            className="flex-1 px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white font-medium rounded-lg transition-all"
           >
             取消
+          </button>
+          <button
+            onClick={onConfirm}
+            className="flex-1 px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-all"
+          >
+            确认停止
           </button>
         </div>
       </div>
