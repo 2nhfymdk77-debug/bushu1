@@ -1133,17 +1133,15 @@ export default function BinanceAutoTrader() {
     try {
       console.log('[connectBinance] Starting connection...');
 
-      // 获取合约列表
-      const symbolsResponse = await fetch(
-        "https://fapi.binance.com/fapi/v1/exchangeInfo?productType=UM",
-        {
-          method: "GET",
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+      // 获取合约列表（使用后端API代理）
+      const symbolsResponse = await fetch("/api/binance/exchangeInfo", {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      });
 
       if (!symbolsResponse.ok) {
-        throw new Error("获取合约列表失败");
+        const errorData = await symbolsResponse.json().catch(() => ({ error: "未知错误" }));
+        throw new Error(`获取合约列表失败: ${errorData.error}`);
       }
 
       const symbolsData = await symbolsResponse.json();
