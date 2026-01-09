@@ -196,8 +196,18 @@ export default function TradingMonitor({ isMobile = false }: TradingMonitorProps
           apiSecret,
           strategyId: taskStrategyId,
           symbols,
-          params: taskParams,
-          interval: "15m",
+          params: {
+            ...taskParams,
+            rsiThreshold: 50,
+            enablePriceEMAFilter: true,
+            enableRSIFilter: true,
+            enableTouchedEmaFilter: true,
+            enableCandleColorFilter: true,
+            emaTouchLookback: 3,
+            minCandleChangePercent: 0.1,
+            minConditionsRequired: 2,
+          },
+          interval: taskParams.trendTimeframe || "15m",
         }),
       });
 

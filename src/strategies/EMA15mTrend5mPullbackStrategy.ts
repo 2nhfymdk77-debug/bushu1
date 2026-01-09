@@ -436,12 +436,12 @@ export class EMATrendPullbackStrategy implements TradingStrategy<EMATrendPullbac
     };
   }
 
-  // ========== 内部辅助方法 ==========
+  // ========== 公共辅助方法 ==========
 
   /**
    * 计算EMA
    */
-  private calculateEMA(data: KLineData[], period: number): number[] {
+  public calculateEMA(data: KLineData[], period: number): number[] {
     if (data.length < period) return [];
 
     const ema: number[] = [];
@@ -464,7 +464,7 @@ export class EMATrendPullbackStrategy implements TradingStrategy<EMATrendPullbac
   /**
    * 计算RSI
    */
-  private calculateRSI(data: KLineData[], period: number): number[] {
+  public calculateRSI(data: KLineData[], period: number): number[] {
     const rsi: number[] = new Array(data.length).fill(50);
     const gains: number[] = [];
     const losses: number[] = [];
@@ -505,7 +505,7 @@ export class EMATrendPullbackStrategy implements TradingStrategy<EMATrendPullbac
   /**
    * 计算成交量平均
    */
-  private calculateVolumeMA(data: KLineData[], period: number): number[] {
+  public calculateVolumeMA(data: KLineData[], period: number): number[] {
     if (data.length < period) return [];
 
     const ma: number[] = [];
@@ -521,7 +521,7 @@ export class EMATrendPullbackStrategy implements TradingStrategy<EMATrendPullbac
   /**
    * 获取趋势方向
    */
-  private getTrendDirection(
+  public getTrendDirection(
     data: KLineData[],
     emaShort: number[],
     emaLong: number[],
@@ -566,7 +566,7 @@ export class EMATrendPullbackStrategy implements TradingStrategy<EMATrendPullbac
   /**
    * 检查进场信号
    */
-  private checkEntrySignal(
+  public checkEntrySignal(
     data: KLineData[],
     trendDirection: "long" | "short",
     emaShort: number[],
