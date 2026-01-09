@@ -302,8 +302,8 @@ export default function BinanceAutoTrader() {
     }
   }, [closeMode]);
 
-  // 自动扫描所有合约
-  const scanAllSymbols = async () => {
+  // 自动扫描所有合约（使用useCallback避免重复触发）
+  const scanAllSymbols = React.useCallback(async () => {
     if (!connected || !autoScanAll || isScanning) {
       console.log('[Scan] 跳过扫描:', { connected, autoScanAll, isScanning });
       return;
@@ -607,7 +607,7 @@ export default function BinanceAutoTrader() {
     } finally {
       setIsScanning(false);
     }
-  };
+  }, [connected, autoScanAll, isScanning, autoTrading, tradingConfig.scanIntervalMinutes]);
 
   // 监听自动扫描开关（独立于WebSocket监控）
   useEffect(() => {
@@ -633,7 +633,7 @@ export default function BinanceAutoTrader() {
         clearInterval(scanIntervalRef);
       }
     };
-  }, [autoScanAll, connected, autoTrading, tradingConfig.scanIntervalMinutes]);
+  }, [autoScanAll, connected, autoTrading, tradingConfig.scanIntervalMinutes, scanAllSymbols]);
 
   // 检查持仓并自动平仓
   const checkPositionsAndAutoClose = async () => {
