@@ -24,6 +24,13 @@ interface Trade {
   takeProfit2: number;
   pnl: number;
   pnlPercent: number;
+  entryFee: number;      // 开仓手续费
+  exitFee: number;       // 平仓手续费
+  totalFee: number;      // 总手续费
+  netPnl: number;        // 净收益（扣除手续费后）
+  positionSize: number;   // 仓位金额（USDT）
+  quantity: number;      // 交易数量
+  leverage: number;      // 杠杆倍数
   reason: string;
 }
 
@@ -34,14 +41,19 @@ interface BacktestResult {
   winRate: number;
   totalProfit: number;
   totalLoss: number;
-  netProfit: number;
+  grossProfit: number;     // 毛利润（未扣除手续费）
+  totalFees: number;       // 总手续费
+  netProfit: number;       // 净利润（扣除手续费后）
   totalReturnRate: number;  // 总收益率（%）
+  netReturnRate: number;   // 净收益率（%）（扣除手续费后）
   annualizedReturn: number; // 年化收益率（%）
   avgWin: number;
   avgLoss: number;
   profitFactor: number;
   maxDrawdown: number;
   trades: Trade[];
+  initialCapital: number;  // 初始资金
+  finalCapital: number;    // 最终资金
 }
 
 export interface StrategyParams {
@@ -55,6 +67,10 @@ export interface StrategyParams {
   leverage: number;
   riskPercent: number;
   minTrendDistance: number;
+  initialCapital: number;   // 初始资金（USDT）
+  maxPositionPercent: number;  // 单笔最大仓位（%）
+  makerFee: number;        // 挂单手续费率（%）
+  takerFee: number;        // 吃单手续费率（%）
 }
 
 export const DEFAULT_PARAMS: StrategyParams = {
@@ -68,6 +84,10 @@ export const DEFAULT_PARAMS: StrategyParams = {
   leverage: 3,
   riskPercent: 2,
   minTrendDistance: 0.15,
+  initialCapital: 10000,   // 默认10000 USDT
+  maxPositionPercent: 30,  // 单笔最大30%仓位
+  makerFee: 0.02,          // 币安普通用户挂单费率
+  takerFee: 0.05,          // 币安普通用户吃单费率
 };
 
 export default function CryptoBacktestTool() {
@@ -358,19 +378,49 @@ export default function CryptoBacktestTool() {
             }
             
             if (exitPrice) {
-              const pnl = direction === "long"
-                ? (exitPrice - currentPosition.entryPrice) / currentPosition.entryPrice * 100 * params.leverage
-                : (currentPosition.entryPrice - exitPrice) / currentPosition.entryPrice * 100 * params.leverage;
-              
+              const entryPrice = currentPosition.entryPrice;
+              const direction = currentPosition.direction;
+              const leverage = params.leverage;
+
+              // 计算仓位金额（USDT）
+              const positionSize = params.initialCapital * (params.maxPositionPercent / 100);
+              const quantity = positionSize / entryPrice;
+
+              // 计算毛收益（未扣除手续费）
+              const grossPnl = direction === "long"
+                ? (exitPrice - entryPrice) / entryPrice * 100 * leverage
+                : (entryPrice - exitPrice) / entryPrice * 100 * leverage;
+
+              // 计算开仓和平仓手续费（假设都是吃单单）
+              // 开仓手续费 = 仓位金额 * 费率
+              const entryFee = positionSize * (params.takerFee / 100);
+              const exitFee = positionSize * (params.takerFee / 100);
+              const totalFee = entryFee + exitFee;
+
+              // 计算净收益（扣除手续费后）
+              // 净收益（USDT）= 毛收益（USDT）- 总手续费
+              const grossPnlUsdt = positionSize * (grossPnl / 100);
+              const netPnlUsdt = grossPnlUsdt - totalFee;
+
+              // 净收益率
+              const netPnlPercent = (netPnlUsdt / positionSize) * 100;
+
               trades.push({
                 ...currentPosition,
                 exitTime: current.timestamp,
                 exitPrice,
-                pnl,
-                pnlPercent: pnl,
+                pnl: grossPnl,
+                pnlPercent: grossPnl,
+                entryFee,
+                exitFee,
+                totalFee,
+                netPnl: netPnlUsdt,
+                positionSize,
+                quantity,
+                leverage,
                 reason: exitReason,
               });
-              
+
               inPosition = false;
               currentPosition = null;
             }
@@ -390,32 +440,44 @@ export default function CryptoBacktestTool() {
           
           if (signal) {
             const current = klines5m[i];
+            const entryPrice = current.close;
             const stopLoss = type === "long"
               ? Math.min(current.low, klines5m[i - 1].low) * (1 - params.stopLossPercent / 100)
               : Math.max(current.high, klines5m[i - 1].high) * (1 + params.stopLossPercent / 100);
-            
-            const riskAmount = Math.abs(current.close - stopLoss) / current.close * 100;
+
+            const riskAmount = Math.abs(entryPrice - stopLoss) / entryPrice * 100;
             const takeProfit1 = type === "long"
-              ? current.close * (1 + riskAmount * params.riskReward1 / 100)
-              : current.close * (1 - riskAmount * params.riskReward1 / 100);
+              ? entryPrice * (1 + riskAmount * params.riskReward1 / 100)
+              : entryPrice * (1 - riskAmount * params.riskReward1 / 100);
             const takeProfit2 = type === "long"
-              ? current.close * (1 + riskAmount * params.riskReward2 / 100)
-              : current.close * (1 - riskAmount * params.riskReward2 / 100);
-            
+              ? entryPrice * (1 + riskAmount * params.riskReward2 / 100)
+              : entryPrice * (1 - riskAmount * params.riskReward2 / 100);
+
+            // 计算仓位金额和数量
+            const positionSize = params.initialCapital * (params.maxPositionPercent / 100);
+            const quantity = positionSize / entryPrice;
+
             currentPosition = {
               entryTime: current.timestamp,
               exitTime: 0,
               direction: type,
-              entryPrice: current.close,
+              entryPrice,
               exitPrice: 0,
               stopLoss,
               takeProfit1,
               takeProfit2,
               pnl: 0,
               pnlPercent: 0,
+              entryFee: 0,
+              exitFee: 0,
+              totalFee: 0,
+              netPnl: 0,
+              positionSize,
+              quantity,
+              leverage: params.leverage,
               reason: "进场",
             };
-            
+
             inPosition = true;
           }
         }
@@ -427,22 +489,31 @@ export default function CryptoBacktestTool() {
         const totalProfit = winningTrades.reduce((sum, t) => sum + t.pnl, 0);
         const totalLoss = Math.abs(losingTrades.reduce((sum, t) => sum + t.pnl, 0));
 
+        // 毛利润（未扣除手续费）
+        const grossProfit = totalProfit - totalLoss;
+
+        // 总手续费
+        const totalFees = trades.reduce((sum, t) => sum + t.totalFee, 0);
+
+        // 净利润（扣除手续费后，USDT）
+        const netProfitUsdt = trades.reduce((sum, t) => sum + t.netPnl, 0);
+
+        // 净收益率（%）
+        const netReturnRate = (netProfitUsdt / params.initialCapital) * 100;
+
         let maxDrawdown = 0;
         let peak = 0;
         let cumulative = 0;
         trades.forEach(t => {
-          cumulative += t.pnlPercent;
+          cumulative += t.netPnl;  // 使用净收益计算回撤
           peak = Math.max(peak, cumulative);
           maxDrawdown = Math.max(maxDrawdown, peak - cumulative);
         });
 
-        // 计算总收益率（净收益的绝对值）
-        const totalReturnRate = cumulative;
+        // 计算总收益率（净收益相对于初始资金）
+        const totalReturnRate = netReturnRate;
 
         // 计算年化收益率
-        // 假设初始资金为1，计算年化收益
-        // 年化收益率 = ((1 + totalReturnRate/100) ^ (365 / tradingDays) - 1) * 100
-        // tradingDays = (lastExitTime - firstEntryTime) / (1000 * 60 * 60 * 24)
         let annualizedReturn = 0;
         if (trades.length > 0) {
           const firstEntryTime = trades[0].entryTime;
@@ -455,6 +526,9 @@ export default function CryptoBacktestTool() {
           }
         }
 
+        // 最终资金
+        const finalCapital = params.initialCapital + netProfitUsdt;
+
         // 保存EMA数据用于图表展示
         setEmaShort15m(emaShort15m);
         setEmaLong15m(emaLong15m);
@@ -466,14 +540,19 @@ export default function CryptoBacktestTool() {
           winRate: trades.length > 0 ? (winningTrades.length / trades.length) * 100 : 0,
           totalProfit,
           totalLoss,
-          netProfit: totalProfit - totalLoss,
+          grossProfit,
+          totalFees,
+          netProfit: netProfitUsdt,
           totalReturnRate,
+          netReturnRate,
           annualizedReturn,
           avgWin: winningTrades.length > 0 ? totalProfit / winningTrades.length : 0,
           avgLoss: losingTrades.length > 0 ? totalLoss / losingTrades.length : 0,
           profitFactor: totalLoss > 0 ? totalProfit / totalLoss : totalProfit > 0 ? Infinity : 0,
-          maxDrawdown,
+          maxDrawdown: (maxDrawdown / params.initialCapital) * 100,  // 转换为百分比
           trades,
+          initialCapital: params.initialCapital,
+          finalCapital,
         });
       } catch (error) {
         console.error("回测出错:", error);
@@ -585,6 +664,56 @@ export default function CryptoBacktestTool() {
               className="w-full bg-gray-700 rounded px-3 py-2 text-white"
             />
           </div>
+
+          <div className="border-t border-gray-700 pt-4 mt-4">
+            <h3 className="text-sm font-semibold text-gray-300 mb-3">仓位管理</h3>
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">初始资金 (USDT)</label>
+            <input
+              type="number"
+              value={params.initialCapital}
+              onChange={(e) => setParams({ ...params, initialCapital: Number(e.target.value) })}
+              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">单笔最大仓位 (%)</label>
+            <input
+              type="number"
+              value={params.maxPositionPercent}
+              onChange={(e) => setParams({ ...params, maxPositionPercent: Number(e.target.value) })}
+              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+            />
+          </div>
+
+          <div className="border-t border-gray-700 pt-4 mt-4">
+            <h3 className="text-sm font-semibold text-gray-300 mb-3">交易成本 (币安普通用户)</h3>
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">挂单费率 Maker Fee (%)</label>
+            <input
+              type="number"
+              step="0.01"
+              value={params.makerFee}
+              onChange={(e) => setParams({ ...params, makerFee: Number(e.target.value) })}
+              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">吃单费率 Taker Fee (%)</label>
+            <input
+              type="number"
+              step="0.01"
+              value={params.takerFee}
+              onChange={(e) => setParams({ ...params, takerFee: Number(e.target.value) })}
+              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+            />
+          </div>
         </div>
         
         <div className="mt-6 space-y-3">
@@ -633,15 +762,15 @@ export default function CryptoBacktestTool() {
                 </p>
               </div>
               <div className="bg-gray-800 rounded-lg p-4">
-                <p className="text-sm text-gray-400">总收益率</p>
-                <p className={`text-2xl font-bold ${result.totalReturnRate >= 0 ? "text-green-500" : "text-red-500"}`}>
-                  {formatNumber(result.totalReturnRate)}%
+                <p className="text-sm text-gray-400">净收益率</p>
+                <p className={`text-2xl font-bold ${result.netReturnRate >= 0 ? "text-green-500" : "text-red-500"}`}>
+                  {formatNumber(result.netReturnRate)}%
                 </p>
               </div>
               <div className="bg-gray-800 rounded-lg p-4">
-                <p className="text-sm text-gray-400">年化收益率</p>
-                <p className={`text-2xl font-bold ${result.annualizedReturn >= 0 ? "text-green-500" : "text-red-500"}`}>
-                  {formatNumber(result.annualizedReturn)}%
+                <p className="text-sm text-gray-400">最终资金</p>
+                <p className="text-2xl font-bold">
+                  {formatNumber(result.finalCapital, 2)}
                 </p>
               </div>
             </div>
@@ -695,23 +824,35 @@ export default function CryptoBacktestTool() {
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-400">总收益率</p>
-                  <p className={`font-semibold ${result.totalReturnRate >= 0 ? "text-green-500" : "text-red-500"}`}>
-                    {formatNumber(result.totalReturnRate)}%
+                  <p className="text-sm text-gray-400">初始资金</p>
+                  <p className="font-semibold">{formatNumber(result.initialCapital, 2)} USDT</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-400">最终资金</p>
+                  <p className={`font-semibold ${result.finalCapital >= result.initialCapital ? "text-green-500" : "text-red-500"}`}>
+                    {formatNumber(result.finalCapital, 2)} USDT
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-400">总盈利</p>
-                  <p className="text-green-500 font-semibold">{formatNumber(result.totalProfit)}%</p>
+                  <p className="text-sm text-gray-400">毛利润</p>
+                  <p className={`font-semibold ${result.grossProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
+                    {formatNumber(result.grossProfit)}%
+                  </p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-400">总亏损</p>
-                  <p className="text-red-500 font-semibold">{formatNumber(result.totalLoss)}%</p>
+                  <p className="text-sm text-gray-400">总手续费</p>
+                  <p className="text-yellow-500 font-semibold">{formatNumber(result.totalFees, 2)} USDT</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-400">净利润</p>
                   <p className={`font-semibold ${result.netProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
-                    {formatNumber(result.netProfit)}%
+                    {formatNumber(result.netProfit, 2)} USDT
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-400">净收益率</p>
+                  <p className={`font-semibold ${result.netReturnRate >= 0 ? "text-green-500" : "text-red-500"}`}>
+                    {formatNumber(result.netReturnRate)}%
                   </p>
                 </div>
                 <div>
@@ -738,6 +879,12 @@ export default function CryptoBacktestTool() {
                   <p className="text-sm text-gray-400">最大回撤</p>
                   <p className="text-yellow-500 font-semibold">{formatNumber(result.maxDrawdown)}%</p>
                 </div>
+                <div>
+                  <p className="text-sm text-gray-400">总收益率 (毛)</p>
+                  <p className={`font-semibold ${result.totalReturnRate >= 0 ? "text-green-500" : "text-red-500"}`}>
+                    {formatNumber(result.totalReturnRate)}%
+                  </p>
+                </div>
               </div>
             </div>
             
@@ -752,39 +899,47 @@ export default function CryptoBacktestTool() {
                   {showTrades ? "收起" : "展开"}
                 </button>
               </div>
-              
+
               {showTrades && (
                 <div className="overflow-x-auto max-h-96 overflow-y-auto">
                   <table className="w-full text-sm">
                     <thead className="bg-gray-700 sticky top-0">
                       <tr>
-                        <th className="px-3 py-2 text-left">序号</th>
-                        <th className="px-3 py-2 text-left">方向</th>
-                        <th className="px-3 py-2 text-left">进场价格</th>
-                        <th className="px-3 py-2 text-left">出场价格</th>
-                        <th className="px-3 py-2 text-left">止损</th>
-                        <th className="px-3 py-2 text-left">止盈</th>
-                        <th className="px-3 py-2 text-left">盈亏</th>
-                        <th className="px-3 py-2 text-left">原因</th>
+                        <th className="px-2 py-2 text-left whitespace-nowrap">序号</th>
+                        <th className="px-2 py-2 text-left whitespace-nowrap">方向</th>
+                        <th className="px-2 py-2 text-left whitespace-nowrap">仓位</th>
+                        <th className="px-2 py-2 text-left whitespace-nowrap">杠杆</th>
+                        <th className="px-2 py-2 text-left whitespace-nowrap">进场价</th>
+                        <th className="px-2 py-2 text-left whitespace-nowrap">出场价</th>
+                        <th className="px-2 py-2 text-left whitespace-nowrap">毛盈亏</th>
+                        <th className="px-2 py-2 text-left whitespace-nowrap">手续费</th>
+                        <th className="px-2 py-2 text-left whitespace-nowrap">净盈亏</th>
+                        <th className="px-2 py-2 text-left whitespace-nowrap">原因</th>
                       </tr>
                     </thead>
                     <tbody>
                       {result.trades.map((trade, index) => (
                         <tr key={index} className="border-t border-gray-700 hover:bg-gray-700/50">
-                          <td className="px-3 py-2">{index + 1}</td>
-                          <td className="px-3 py-2">
+                          <td className="px-2 py-2">{index + 1}</td>
+                          <td className="px-2 py-2">
                             <span className={`px-2 py-1 rounded text-xs ${trade.direction === "long" ? "bg-green-600" : "bg-red-600"}`}>
                               {trade.direction === "long" ? "做多" : "做空"}
                             </span>
                           </td>
-                          <td className="px-3 py-2">{formatNumber(trade.entryPrice, 2)}</td>
-                          <td className="px-3 py-2">{formatNumber(trade.exitPrice, 2)}</td>
-                          <td className="px-3 py-2">{formatNumber(trade.stopLoss, 2)}</td>
-                          <td className="px-3 py-2">{formatNumber(trade.takeProfit2, 2)}</td>
-                          <td className={`px-3 py-2 font-semibold ${trade.pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                          <td className="px-2 py-2">{formatNumber(trade.positionSize, 0)} USDT</td>
+                          <td className="px-2 py-2">{trade.leverage}x</td>
+                          <td className="px-2 py-2">{formatNumber(trade.entryPrice, 2)}</td>
+                          <td className="px-2 py-2">{formatNumber(trade.exitPrice, 2)}</td>
+                          <td className={`px-2 py-2 font-semibold ${trade.pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
                             {formatNumber(trade.pnl, 2)}%
                           </td>
-                          <td className="px-3 py-2">{trade.reason}</td>
+                          <td className="px-2 py-2 text-yellow-500">
+                            {formatNumber(trade.totalFee, 2)} USDT
+                          </td>
+                          <td className={`px-2 py-2 font-semibold ${trade.netPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                            {formatNumber(trade.netPnl, 2)} USDT
+                          </td>
+                          <td className="px-2 py-2">{trade.reason}</td>
                         </tr>
                       ))}
                     </tbody>
