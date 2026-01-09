@@ -1933,11 +1933,14 @@ export default function BinanceAutoTrader() {
       }
 
       const availableBalance = accountBalance.available;
-      const positionValue = availableBalance * (tradingConfig.positionSizePercent / 100);
+      // 可用保证金 = 账户余额 × 仓位比例
+      const marginToUse = availableBalance * (tradingConfig.positionSizePercent / 100);
+      // 可开仓名义价值 = 可用保证金 × 杠杆倍数（充分利用杠杆）
+      const positionValue = marginToUse * strategyParams.leverage;
       let quantity = positionValue / signal.entryPrice;
 
       // 记录仓位计算信息
-      addSystemLog(`仓位计算: 可用=${availableBalance.toFixed(2)}USDT, 比例=${tradingConfig.positionSizePercent}%, 名义价值=${positionValue.toFixed(2)}USDT, 数量=${quantity.toFixed(4)}`, 'info');
+      addSystemLog(`仓位计算: 可用=${availableBalance.toFixed(2)}USDT, 比例=${tradingConfig.positionSizePercent}%, 杠杆=${strategyParams.leverage}x, 保证金=${marginToUse.toFixed(2)}USDT, 名义价值=${positionValue.toFixed(2)}USDT, 数量=${quantity.toFixed(4)}`, 'info');
 
       // 计算止损止盈
       const stopLossPrice = signal.direction === "long"
