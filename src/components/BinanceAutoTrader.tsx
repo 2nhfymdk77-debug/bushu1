@@ -86,17 +86,10 @@ interface Position {
   unRealizedProfit: number;
   leverage: number;
   notional: number;
-  // 分段止盈和移动止损的额外信息
-  highestPrice?: number; // 多头最高价
-  lowestPrice?: number;  // 空头最低价
-  takeProfitExecuted?: {
-    r1: boolean;  // 1R止盈是否执行
-    r2: boolean;  // 2R止盈是否执行
-    r3: boolean;  // 3R止盈是否执行
-  };
-  trailingStopPrice?: number; // 当前移动止损价格
-  stopLossBreakeven?: boolean; // 止损是否已移动到保本价
-  openTime?: number; // 开仓时间
+  // 盈亏平衡相关
+  breakevenPrice?: number;      // 盈亏平衡时的止损价格（成本价）
+  breakevenTriggered?: boolean; // 是否已触发盈亏平衡
+  openTime?: number;             // 开仓时间
 }
 
 interface Order {
@@ -165,51 +158,29 @@ interface TradingConfig {
   maxOpenPositions: number;
   stopLossPercent: number;
   takeProfitPercent: number;
+  breakevenPercent: number;  // 盈亏平衡点（达到此盈利后止损移到成本价）
   maxDailyLoss: number;
   dailyTradesLimit: number;
-  // 自动平仓配置
+  // 自动平仓配置（简化版）
   autoStopLoss: boolean;
   autoTakeProfit: boolean;
-  reverseSignalClose: boolean;
-  // 分段止盈配置
-  usePartialTakeProfit: boolean;  // 使用分段止盈
-  partialTakeProfitR1: number;   // 1R止盈比例（%）
-  partialTakeProfitR2: number;   // 2R止盈比例（%）
-  partialTakeProfitR3: number;   // 3R止盈比例（%）
-  // 移动止损配置
-  useTrailingStop: boolean;       // 使用移动止损
-  trailingStopTriggerR: number;   // 触发移动止损的R值（如1R）
-  trailingStopMoveToBreakeven: boolean; // 达到1R后移动到保本价
   // 扫描配置
   scanIntervalMinutes: number;   // 自动扫描间隔时间（分钟）
-  // 止盈止损订单配置
-  useStopTakeProfitOrders: boolean; // 开仓时同时挂止盈止损单（不使用分段止盈和移动止损）
 }
 
 const DEFAULT_TRADING_CONFIG: TradingConfig = {
-  positionSizePercent: 25,  // 优化：从10%提高到25%，更充分利用资金
-  maxOpenPositions: 3,
-  stopLossPercent: 0.5,     // 优化：从0.5%保持不变（止损比例）
-  takeProfitPercent: 1.0,
+  positionSizePercent: 4,       // 4%仓位（每个占用2 USDT保证金）
+  maxOpenPositions: 6,         // 最多6个持仓
+  stopLossPercent: 0.5,        // 止损0.5%
+  takeProfitPercent: 1.0,      // 止盈1.0%
+  breakevenPercent: 0.5,       // 盈利0.5%时止损移到成本价
   maxDailyLoss: 5,
   dailyTradesLimit: 10,
-  // 默认开启自动止损止盈和反向信号平仓
+  // 自动止损止盈
   autoStopLoss: true,
-  autoTakeProfit: false,  // 关闭简单止盈，使用分段止盈
-  reverseSignalClose: true,
-  // 分段止盈配置（按照用户要求）
-  usePartialTakeProfit: true,
-  partialTakeProfitR1: 50,  // 1R止盈50%
-  partialTakeProfitR2: 50,  // 2R止盈剩余50%
-  partialTakeProfitR3: 50,  // 3R止盈所有（实际上2R已经全平了）
-  // 移动止损配置
-  useTrailingStop: true,
-  trailingStopTriggerR: 1,  // 1R时触发移动止损
-  trailingStopMoveToBreakeven: true, // 达到1R后移动到保本价
+  autoTakeProfit: true,
   // 扫描配置
-  scanIntervalMinutes: 5,  // 默认每5分钟扫描一次
-  // 止盈止损订单配置（默认开启，优先于分段止盈）
-  useStopTakeProfitOrders: true, // 开仓时同时挂止盈止损单
+  scanIntervalMinutes: 5,     // 默认每5分钟扫描一次
 };
 
 export default function BinanceAutoTrader() {
@@ -240,8 +211,8 @@ export default function BinanceAutoTrader() {
   const [systemLog, setSystemLog] = useState<string[]>([]); // 系统日志（交易、WebSocket、系统事件）
   const [customIntervalMinutes, setCustomIntervalMinutes] = useState(5); // 自定义间隔时间（分钟）
   const [contractPool, setContractPool] = useState<string[]>([]); // 合约池（高成交量合约列表）
-  const [closeMode, setCloseMode] = useState<'stopTakeProfit' | 'partialTrailing' | 'simple'>('stopTakeProfit'); // 平仓模式选择
-  const [showAdvancedParams, setShowAdvancedParams] = useState(false); // 显示高级参数
+  const [closeMode, setCloseMode] = useState<'simple'>('simple');
+  const [showAdvancedParams, setShowAdvancedParams] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -267,40 +238,6 @@ export default function BinanceAutoTrader() {
     if (savedApiKey) setApiKey(savedApiKey);
     if (savedApiSecret) setApiSecret(savedApiSecret);
   }, []);
-
-  // 根据平仓模式自动配置相关参数
-  useEffect(() => {
-    switch (closeMode) {
-      case 'stopTakeProfit':
-        setTradingConfig({
-          ...tradingConfig,
-          useStopTakeProfitOrders: true,
-          usePartialTakeProfit: false,
-          useTrailingStop: false,
-          autoTakeProfit: false,
-        });
-        break;
-      case 'partialTrailing':
-        setTradingConfig({
-          ...tradingConfig,
-          useStopTakeProfitOrders: false,
-          usePartialTakeProfit: true,
-          useTrailingStop: true,
-          trailingStopMoveToBreakeven: true,
-          autoTakeProfit: false,
-        });
-        break;
-      case 'simple':
-        setTradingConfig({
-          ...tradingConfig,
-          useStopTakeProfitOrders: false,
-          usePartialTakeProfit: false,
-          useTrailingStop: false,
-          autoTakeProfit: true,
-        });
-        break;
-    }
-  }, [closeMode]);
 
   // 自动扫描所有合约（使用useCallback避免重复触发）
   const scanAllSymbols = React.useCallback(async () => {
@@ -639,11 +576,6 @@ export default function BinanceAutoTrader() {
   const checkPositionsAndAutoClose = async () => {
     if (!autoTrading || !connected || positions.length === 0) return;
 
-    // 如果使用止盈止损订单模式，则不执行自动平仓逻辑（止盈止损单已挂在币安服务器）
-    if (tradingConfig.useStopTakeProfitOrders) {
-      return;
-    }
-
     for (const position of positions) {
       if (position.positionAmt === 0) continue;
 
@@ -657,25 +589,16 @@ export default function BinanceAutoTrader() {
       const symbolInfo = symbols.find(s => s.symbol === symbol);
       const pricePrecision = symbolInfo?.pricePrecision || 2;
 
-      // 计算风险值R（止损距离）
-      const riskDistance = entryPrice * (tradingConfig.stopLossPercent / 100);
-      const rPrice = riskDistance; // 1R的价格距离
-
-      // 计算1R、2R、3R价格（使用自定义盈亏比倍数）
-      const r1Price = isLong ? entryPrice + rPrice * strategyParams.riskRewardMultiplier1 : entryPrice - rPrice * strategyParams.riskRewardMultiplier1;
-      const r2Price = isLong ? entryPrice + rPrice * strategyParams.riskRewardMultiplier2 : entryPrice - rPrice * strategyParams.riskRewardMultiplier2;
-      const r3Price = isLong ? entryPrice + rPrice * strategyParams.riskRewardMultiplier3 : entryPrice - rPrice * strategyParams.riskRewardMultiplier3;
-
       // 基础止损价格
       const stopLossPrice = isLong
         ? entryPrice * (1 - tradingConfig.stopLossPercent / 100)
         : entryPrice * (1 + tradingConfig.stopLossPercent / 100);
 
-      // 当前实际止损价格（可能已移动）
-      const currentStopLossPrice = position.trailingStopPrice || stopLossPrice;
+      // 实际止损价格（可能已移到成本价）
+      const currentStopLossPrice = position.breakevenPrice || stopLossPrice;
 
-      // 1. 简单自动止盈（如果不使用分段止盈）
-      if (tradingConfig.autoTakeProfit && !tradingConfig.usePartialTakeProfit) {
+      // 1. 自动止盈
+      if (tradingConfig.autoTakeProfit) {
         const takeProfitPrice = isLong
           ? entryPrice * (1 + tradingConfig.takeProfitPercent / 100)
           : entryPrice * (1 - tradingConfig.takeProfitPercent / 100);
@@ -686,157 +609,50 @@ export default function BinanceAutoTrader() {
 
         if (hitTakeProfit) {
           console.log(`触发达盈: ${symbol} 价格: ${currentPrice.toFixed(2)} 止盈价: ${takeProfitPrice.toFixed(2)}`);
+          addSystemLog(`[${symbol}] 止盈触发: 价格 ${currentPrice.toFixed(pricePrecision)} >= 目标 ${takeProfitPrice.toFixed(pricePrecision)}`, 'success');
           await executeAutoClose(position, "止盈触发");
           continue;
         }
       }
 
-      // 2. 分段止盈
-      if (tradingConfig.usePartialTakeProfit) {
-        const tpExecuted = position.takeProfitExecuted || { r1: false, r2: false, r3: false };
+      // 2. 盈亏平衡（达到盈利后止损移到成本价）
+      const breakevenPrice = isLong
+        ? entryPrice * (1 + tradingConfig.breakevenPercent / 100)
+        : entryPrice * (1 - tradingConfig.breakevenPercent / 100);
 
-        // 2.1 检查1R止盈
-        if (!tpExecuted.r1) {
-          const hitR1 = isLong ? currentPrice >= r1Price : currentPrice <= r1Price;
-          if (hitR1) {
-            console.log(`[分段止盈] 达到1R止盈位: ${symbol} 价格: ${currentPrice.toFixed(2)} 1R价: ${r1Price.toFixed(2)} 当前持仓: ${position.positionAmt}`);
-            // 平仓指定比例
-            await executePartialClose(position, tradingConfig.partialTakeProfitR1 / 100, "1R止盈");
-            continue; // 执行后继续下一个持仓
-          }
-        }
+      const hitBreakeven = isLong
+        ? currentPrice >= breakevenPrice
+        : currentPrice <= breakevenPrice;
 
-        // 2.2 检查2R止盈
-        if (tpExecuted.r1 && !tpExecuted.r2) {
-          const hitR2 = isLong ? currentPrice >= r2Price : currentPrice <= r2Price;
-          if (hitR2) {
-            console.log(`[分段止盈] 达到2R止盈位: ${symbol} 价格: ${currentPrice.toFixed(2)} 2R价: ${r2Price.toFixed(2)} 当前持仓: ${position.positionAmt} 止盈状态: r1=${tpExecuted.r1}`);
-            // 平仓指定比例
-            await executePartialClose(position, tradingConfig.partialTakeProfitR2 / 100, "2R止盈");
-            continue;
-          }
-        }
-
-        // 2.3 检查3R止盈（作为兜底）
-        if (tpExecuted.r2 && !tpExecuted.r3) {
-          const hitR3 = isLong ? currentPrice >= r3Price : currentPrice <= r3Price;
-          if (hitR3) {
-            console.log(`[分段止盈] 达到3R止盈位: ${symbol} 价格: ${currentPrice.toFixed(2)} 3R价: ${r3Price.toFixed(2)} 当前持仓: ${position.positionAmt}`);
-            // 平仓所有剩余仓位
-            await executePartialClose(position, 1.0, "3R止盈");
-            continue;
-          }
-        }
+      if (hitBreakeven && !position.breakevenTriggered) {
+        // 将止损移到成本价
+        setPositions(prevPositions =>
+          prevPositions.map(p => {
+            if (p.symbol === symbol && p.positionSide === position.positionSide) {
+              return {
+                ...p,
+                breakevenPrice: entryPrice,
+                breakevenTriggered: true
+              };
+            }
+            return p;
+          })
+        );
+        addSystemLog(`[${symbol}] 盈亏平衡: 价格 ${currentPrice.toFixed(pricePrecision)} >= 盈利目标 ${breakevenPrice.toFixed(pricePrecision)}, 止损移至成本价 ${entryPrice.toFixed(pricePrecision)}`, 'info');
       }
 
-      // 3. 移动止损
-      if (tradingConfig.useTrailingStop) {
-        // 更新最高价/最低价（无论是否触发，都持续跟踪极值）
-        const currentHighestPrice = Math.max(position.highestPrice || entryPrice, currentPrice);
-        const currentLowestPrice = Math.min(position.lowestPrice || entryPrice, currentPrice);
-
-        // 检查是否达到触发移动止损的R值
-        const triggerPrice = isLong
-          ? entryPrice + rPrice * tradingConfig.trailingStopTriggerR
-          : entryPrice - rPrice * tradingConfig.trailingStopTriggerR;
-
-        const hitTrigger = isLong
-          ? currentPrice >= triggerPrice
-          : currentPrice <= triggerPrice;
-
-        // 计算移动止损价格
-        let trailingStopPrice = stopLossPrice;
-        let newStopLossBreakeven = position.stopLossBreakeven || false;
-        let shouldUpdatePosition = false;
-
-        if (hitTrigger) {
-          shouldUpdatePosition = true;
-
-          if (isLong) {
-            // 多头：最高价 - 移动止损距离
-            const trailingDistance = rPrice * tradingConfig.trailingStopTriggerR;
-            trailingStopPrice = currentHighestPrice - trailingDistance;
-
-            // 如果配置了移动到保本价，且移动止损价格不如保本价有利
-            if (tradingConfig.trailingStopMoveToBreakeven && trailingStopPrice < entryPrice) {
-              trailingStopPrice = entryPrice;
-              newStopLossBreakeven = true;
-            }
-          } else {
-            // 空头：最低价 + 移动止损距离
-            const trailingDistance = rPrice * tradingConfig.trailingStopTriggerR;
-            trailingStopPrice = currentLowestPrice + trailingDistance;
-
-            // 如果配置了移动到保本价，且移动止损价格不如保本价有利
-            if (tradingConfig.trailingStopMoveToBreakeven && trailingStopPrice > entryPrice) {
-              trailingStopPrice = entryPrice;
-              newStopLossBreakeven = true;
-            }
-          }
-
-          // 更新position状态中的最高价/最低价和移动止损价格
-          setPositions(prevPositions =>
-            prevPositions.map(p => {
-              if (p.symbol === symbol && p.positionSide === position.positionSide) {
-                return {
-                  ...p,
-                  highestPrice: currentHighestPrice,
-                  lowestPrice: currentLowestPrice,
-                  trailingStopPrice,
-                  stopLossBreakeven: newStopLossBreakeven
-                };
-              }
-              return p;
-            })
-          );
-
-          // 记录日志
-          addSystemLog(`[${symbol}] 移动止损更新: 触发价=${triggerPrice.toFixed(pricePrecision)}, 移动止损价=${trailingStopPrice.toFixed(pricePrecision)}, 保本=${newStopLossBreakeven ? '是' : '否'}, 最高=${currentHighestPrice.toFixed(pricePrecision)}, 最低=${currentLowestPrice.toFixed(pricePrecision)}`, 'info');
-        }
-
-        // 检查是否触发移动止损
-        const hitTrailingStop = isLong
-          ? currentPrice <= trailingStopPrice
-          : currentPrice >= trailingStopPrice;
-
-        if (hitTrailingStop) {
-          console.log(`触发移动止损: ${symbol} 价格: ${currentPrice.toFixed(2)} 移动止损价: ${trailingStopPrice.toFixed(2)}`);
-          addSystemLog(`触发移动止损: ${symbol} 价格: ${currentPrice.toFixed(2)} 移动止损价: ${trailingStopPrice.toFixed(2)}`, 'success');
-          await executeAutoClose(position, "移动止损触发");
-          continue;
-        }
-      }
-
-      // 4. 自动止损（简单止损，优先级最低）
+      // 3. 自动止损
       if (tradingConfig.autoStopLoss) {
         const hitStopLoss = isLong
           ? currentPrice <= currentStopLossPrice
           : currentPrice >= currentStopLossPrice;
 
         if (hitStopLoss) {
-          console.log(`触发止损: ${symbol} 价格: ${currentPrice.toFixed(2)} 止损价: ${currentStopLossPrice.toFixed(2)}`);
-          await executeAutoClose(position, "止损触发");
+          const reason = position.breakevenTriggered ? "盈亏平衡后止损" : "止损触发";
+          console.log(`${reason}: ${symbol} 价格: ${currentPrice.toFixed(2)} 止损价: ${currentStopLossPrice.toFixed(2)}`);
+          addSystemLog(`[${symbol}] ${reason}: 价格 ${currentPrice.toFixed(pricePrecision)} <= 止损 ${currentStopLossPrice.toFixed(pricePrecision)}`, position.breakevenTriggered ? 'success' : 'error');
+          await executeAutoClose(position, reason);
           continue;
-        }
-      }
-
-      // 5. 反向信号平仓
-      if (tradingConfig.reverseSignalClose) {
-        const symbolData = klineData.get(symbol);
-        if (symbolData && symbolData.length >= strategyParams.emaLong + 10) {
-          const trendSignal = checkTrendDirection(symbol, symbolData);
-
-          if (trendSignal) {
-            // 检测到反向信号
-            const isReverseSignal = (isLong && trendSignal.direction === "short") ||
-                                   (!isLong && trendSignal.direction === "long");
-
-            if (isReverseSignal) {
-              console.log(`反向信号平仓: ${symbol} 持仓方向: ${isLong ? "多头" : "空头"} 信号: ${trendSignal.direction}`);
-              await executeAutoClose(position, `反向信号: ${trendSignal.direction}`);
-              continue;
-            }
-          }
         }
       }
     }
@@ -884,7 +700,7 @@ export default function BinanceAutoTrader() {
 
       // 记录平仓交易
       const closeTrade: TradeRecord = {
-        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, // 唯一ID
+        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         symbol: position.symbol,
         side,
         type: "MARKET",
@@ -902,7 +718,7 @@ export default function BinanceAutoTrader() {
         id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         symbol: position.symbol,
         positionSide: position.positionSide,
-        openTime: position.openTime || Date.now() - 3600000, // 使用真实开仓时间，如果没有则估算
+        openTime: position.openTime || Date.now() - 3600000,
         closeTime: Date.now(),
         entryPrice: position.entryPrice,
         exitPrice: position.markPrice,
@@ -917,35 +733,18 @@ export default function BinanceAutoTrader() {
 
       setCompletedTrades((prev) => [completedTrade, ...prev.slice(0, 199)]);
 
-      // 更新止盈执行状态和持仓数量
+      // 更新持仓数量
       setPositions((prev) =>
         prev.map((p) => {
-          // 同时匹配 symbol 和 positionSide，确保更新正确的持仓
           if (p.symbol === position.symbol && p.positionSide === position.positionSide) {
-            const newTpExecuted = p.takeProfitExecuted || { r1: false, r2: false, r3: false };
             const newAmt = isLong
               ? p.positionAmt - closeQuantity
-              : p.positionAmt + closeQuantity; // 空头持仓是负数，加closeQuantity会向0靠近
+              : p.positionAmt + closeQuantity;
 
-            if (reason.includes("1R")) {
-              return {
-                ...p,
-                positionAmt: newAmt,
-                takeProfitExecuted: { ...newTpExecuted, r1: true },
-              };
-            } else if (reason.includes("2R")) {
-              return {
-                ...p,
-                positionAmt: newAmt,
-                takeProfitExecuted: { ...newTpExecuted, r2: true },
-              };
-            } else if (reason.includes("3R")) {
-              return {
-                ...p,
-                positionAmt: newAmt,
-                takeProfitExecuted: { ...newTpExecuted, r3: true },
-              };
-            }
+            return {
+              ...p,
+              positionAmt: newAmt,
+            };
           }
           return p;
         })
@@ -953,7 +752,7 @@ export default function BinanceAutoTrader() {
 
       console.log(`部分平仓成功: ${position.symbol} 比例: ${(percent * 100).toFixed(0)}% 原因: ${reason} 盈亏: ${(position.unRealizedProfit * percent).toFixed(2)} USDT`);
 
-      // 立即刷新持仓信息，确保状态同步（不调用 checkPositionsAndAutoClose，避免重复触发）
+      // 立即刷新持仓信息，确保状态同步
       await fetchAccountInfo(false);
     } catch (err: any) {
       console.error(`部分平仓失败: ${position.symbol}`, err);
@@ -1236,12 +1035,16 @@ export default function BinanceAutoTrader() {
         // 保存旧的持仓，用于检测被平掉的持仓
         const oldPositions = positions;
 
-        // 保留现有的 takeProfitExecuted 和 openTime 状态
-        const existingTpExecuted = new Map<string, { r1: boolean; r2: boolean; r3: boolean }>();
-        const existingOpenTimes = new Map<string, number>(); // 保存现有持仓的开仓时间
+        // 保留现有的 breakevenPrice 和 openTime 状态
+        const existingBreakevenPrices = new Map<string, number>();
+        const existingBreakevenTriggered = new Map<string, boolean>();
+        const existingOpenTimes = new Map<string, number>();
         positions.forEach(p => {
-          if (p.takeProfitExecuted && p.positionAmt !== 0) {
-            existingTpExecuted.set(`${p.symbol}_${p.positionSide}`, p.takeProfitExecuted);
+          if (p.breakevenPrice && p.positionAmt !== 0) {
+            existingBreakevenPrices.set(`${p.symbol}_${p.positionSide}`, p.breakevenPrice);
+          }
+          if (p.breakevenTriggered !== undefined && p.positionAmt !== 0) {
+            existingBreakevenTriggered.set(`${p.symbol}_${p.positionSide}`, p.breakevenTriggered);
           }
           if (p.openTime && p.positionAmt !== 0) {
             existingOpenTimes.set(`${p.symbol}_${p.positionSide}`, p.openTime);
@@ -1251,7 +1054,8 @@ export default function BinanceAutoTrader() {
         // 初始化新增字段
         const initializedPositions = positionsData.map((p: Position) => {
           const key = `${p.symbol}_${p.positionSide}`;
-          const existingTp = existingTpExecuted.get(key);
+          const existingBreakevenPrice = existingBreakevenPrices.get(key);
+          const existingTriggered = existingBreakevenTriggered.get(key);
           const existingOpenTime = existingOpenTimes.get(key);
 
           // 如果是新持仓（没有记录过openTime），设置当前时间为开仓时间
@@ -1259,19 +1063,14 @@ export default function BinanceAutoTrader() {
 
           return {
             ...p,
-            // 对于新持仓，最高价/最低价初始化为入场价；对于已有持仓，保留现有值或使用入场价
-            highestPrice: isOpeningNewPosition ? p.entryPrice : (p.highestPrice || p.entryPrice),
-            lowestPrice: isOpeningNewPosition ? p.entryPrice : (p.lowestPrice || p.entryPrice),
-            takeProfitExecuted: existingTp || p.takeProfitExecuted || { r1: false, r2: false, r3: false },
-            trailingStopPrice: p.trailingStopPrice,
-            stopLossBreakeven: isOpeningNewPosition ? false : (p.stopLossBreakeven || false),
-            openTime: existingOpenTime || p.openTime || Date.now(), // 保留已有openTime或使用当前时间
+            breakevenPrice: existingBreakevenPrice,
+            breakevenTriggered: existingTriggered || false,
+            openTime: existingOpenTime || p.openTime || Date.now(),
           };
         });
 
         setPositions(initializedPositions);
-        console.log('[fetchAccountInfo] Positions fetched:', initializedPositions.length,
-          'Existing TP states:', Array.from(existingTpExecuted.entries()).map(([k, v]) => `${k}: r1=${v.r1}, r2=${v.r2}, r3=${v.r3}`));
+        console.log('[fetchAccountInfo] Positions fetched:', initializedPositions.length);
 
         // 检测被平掉的持仓（止盈止损订单成交等情况）
         if (oldPositions.length > 0) {
@@ -2011,13 +1810,13 @@ export default function BinanceAutoTrader() {
         result.status === "FILLED" ? "FILLED" : "PENDING";
 
       const trade: TradeRecord = {
-        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, // 唯一ID
+        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         symbol: signal.symbol,
         side,
         type,
         quantity: formattedQuantity,
         price: signal.entryPrice,
-        time: Date.now(), // 使用当前时间而不是signal.time
+        time: Date.now(),
         status: orderStatus,
         orderId,
       };
@@ -2025,93 +1824,6 @@ export default function BinanceAutoTrader() {
       setTradeRecords((prev) => [trade, ...prev.slice(0, 99)]);
       setDailyTradesCount((prev) => prev + 1);
       addSystemLog(`交易成功: ${signal.symbol} ${side} ${formattedQuantity.toFixed(4)} @ ${signal.entryPrice}`, 'success');
-
-      // 如果启用了止盈止损订单，立即挂止盈止损单
-      if (tradingConfig.useStopTakeProfitOrders) {
-        addSystemLog(`正在设置止盈止损单...`, 'info');
-
-        try {
-          // 计算止损止盈价格
-          const stopLossPrice = signal.direction === "long"
-            ? signal.entryPrice * (1 - tradingConfig.stopLossPercent / 100)
-            : signal.entryPrice * (1 + tradingConfig.stopLossPercent / 100);
-
-          const takeProfitPrice = signal.direction === "long"
-            ? signal.entryPrice * (1 + tradingConfig.takeProfitPercent / 100)
-            : signal.entryPrice * (1 - tradingConfig.takeProfitPercent / 100);
-
-          // 格式化价格
-          const symbolInfo = symbols.find(s => s.symbol === signal.symbol);
-          const pricePrecision = symbolInfo?.pricePrecision ?? 8;
-
-          const formattedStopLossPrice = parseFloat(stopLossPrice.toFixed(pricePrecision));
-          const formattedTakeProfitPrice = parseFloat(takeProfitPrice.toFixed(pricePrecision));
-
-          // 止损订单（使用专门的算法订单API）
-          const stopLossSide = signal.direction === "long" ? "SELL" : "BUY";
-          const stopLossOrder = {
-            apiKey,
-            apiSecret,
-            symbol: signal.symbol,
-            side: stopLossSide,
-            type: "STOP_MARKET",
-            quantity: formattedQuantity,
-            stopPrice: formattedStopLossPrice, // 触发价格
-            positionSide,
-            reduceOnly: true, // 只减仓
-          };
-
-          // 止盈订单（使用专门的算法订单API）
-          const takeProfitSide = signal.direction === "long" ? "SELL" : "BUY";
-          const takeProfitOrder = {
-            apiKey,
-            apiSecret,
-            symbol: signal.symbol,
-            side: takeProfitSide,
-            type: "TAKE_PROFIT_MARKET",
-            quantity: formattedQuantity,
-            stopPrice: formattedTakeProfitPrice, // 触发价格
-            positionSide,
-            reduceOnly: true, // 只减仓
-          };
-
-          // 并行下达止盈止损单（使用算法订单API端点）
-          const [stopLossResponse, takeProfitResponse] = await Promise.all([
-            fetch("/api/binance/algoOrder", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(stopLossOrder),
-            }),
-            fetch("/api/binance/algoOrder", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(takeProfitOrder),
-            }),
-          ]);
-
-          // 处理止损单结果
-          if (stopLossResponse.ok) {
-            const stopLossResult = await stopLossResponse.json();
-            addSystemLog(`止损单已挂: ${signal.symbol} 触发价=${formattedStopLossPrice} 订单ID=${stopLossResult.orderId}`, 'success');
-          } else {
-            const stopLossError = await stopLossResponse.json();
-            addSystemLog(`止损单挂单失败: ${stopLossError.error} (code: ${stopLossError.code})`, 'error');
-          }
-
-          // 处理止盈单结果
-          if (takeProfitResponse.ok) {
-            const takeProfitResult = await takeProfitResponse.json();
-            addSystemLog(`止盈单已挂: ${signal.symbol} 触发价=${formattedTakeProfitPrice} 订单ID=${takeProfitResult.orderId}`, 'success');
-          } else {
-            const takeProfitError = await takeProfitResponse.json();
-            addSystemLog(`止盈单挂单失败: ${takeProfitError.error} (code: ${takeProfitError.code})`, 'error');
-          }
-
-        } catch (err: any) {
-          addSystemLog(`止盈止损单挂单失败: ${err.message}`, 'error');
-          // 即使止盈止损单失败，也不影响主订单的完成
-        }
-      }
 
       // 刷新交易记录中待成交订单的状态
       await refreshPendingOrders();
@@ -2124,13 +1836,13 @@ export default function BinanceAutoTrader() {
       setError(errorMsg);
 
       const failedTrade: TradeRecord = {
-        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`, // 唯一ID
+        id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         symbol: signal.symbol,
         side: signal.direction === "long" ? "BUY" : "SELL",
         type: "MARKET",
         quantity: 0,
         price: signal.entryPrice,
-        time: Date.now(), // 使用当前时间
+        time: Date.now(),
         status: "FAILED",
       };
       setTradeRecords((prev) => [failedTrade, ...prev.slice(0, 99)]);
