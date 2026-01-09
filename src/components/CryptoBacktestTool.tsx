@@ -786,13 +786,13 @@ export default function CryptoBacktestTool() {
     return ma;
   }
 
-  function getTrendDirection(index: number, emaShort: number[], emaLong: number[], volumeMA: number[]): "long" | "short" | "none" {
+  function getTrendDirection(klines: KLine[], index: number, emaShort: number[], emaLong: number[], volumeMA: number[]): "long" | "short" | "none" {
     if (index < params.emaLong) return "none";
 
     const emaS = emaShort[index];
     const emaL = emaLong[index];
-    const close = klines15m[index].close;
-    const volume = klines15m[index].volume;
+    const close = klines[index].close;
+    const volume = klines[index].volume;
     const volMA = volumeMA[index];
 
     const distance = Math.abs(emaS - emaL) / emaL * 100;
@@ -802,7 +802,7 @@ export default function CryptoBacktestTool() {
     if (bullish) {
       let valid = true;
       for (let i = 1; i <= 3 && index - i >= 0; i++) {
-        if (klines15m[index - i].close < emaLong[index - i]) {
+        if (klines[index - i].close < emaLong[index - i]) {
           valid = false;
           break;
         }
@@ -814,7 +814,7 @@ export default function CryptoBacktestTool() {
     if (bearish) {
       let valid = true;
       for (let i = 1; i <= 3 && index - i >= 0; i++) {
-        if (klines15m[index - i].close > emaLong[index - i]) {
+        if (klines[index - i].close > emaLong[index - i]) {
           valid = false;
           break;
         }
@@ -825,12 +825,12 @@ export default function CryptoBacktestTool() {
     return "none";
   }
 
-  function checkEntrySignal(index: number, trendDirection: "long" | "short", emaShort5m: number[], emaLong5m: number[], rsi5m: number[]): { signal: boolean, type: "long" | "short" } {
+  function checkEntrySignal(klines: KLine[], index: number, trendDirection: "long" | "short", emaShort5m: number[], emaLong5m: number[], rsi5m: number[]): { signal: boolean, type: "long" | "short" } {
     if (index < params.emaLong + 10) return { signal: false, type: trendDirection };
 
-    const current = klines5m[index];
-    const prev = klines5m[index - 1];
-    const prev2 = klines5m[index - 2];
+    const current = klines[index];
+    const prev = klines[index - 1];
+    const prev2 = klines[index - 2];
     const emaS = emaShort5m[index];
     const emaL = emaLong5m[index];
     const rsi = rsi5m[index];
@@ -864,29 +864,29 @@ export default function CryptoBacktestTool() {
 
     setTimeout(() => {
       try {
-        const emaShort15m = calculateEMA(klines15m, params.emaShort);
-        const emaLong15m = calculateEMA(klines15m, params.emaLong);
-        const volumeMA15m = calculateVolumeMA(klines15m, params.volumePeriod);
-        const emaShort5m = calculateEMA(klines5m, params.emaShort);
-        const emaLong5m = calculateEMA(klines5m, params.emaLong);
-        const rsi5m = calculateRSI(klines5m, params.rsiPeriod);
+        const emaShort15m = calculateEMA(data15m, params.emaShort);
+        const emaLong15m = calculateEMA(data15m, params.emaLong);
+        const volumeMA15m = calculateVolumeMA(data15m, params.volumePeriod);
+        const emaShort5m = calculateEMA(data5m, params.emaShort);
+        const emaLong5m = calculateEMA(data5m, params.emaLong);
+        const rsi5m = calculateRSI(data5m, params.rsiPeriod);
 
         const trades: Trade[] = [];
         let inPosition = false;
         let currentPosition: Trade | null = null;
 
         const get15mIndex = (k5: number): number => {
-          const time5 = klines5m[k5].timestamp;
-          for (let i = 0; i < klines15m.length; i++) {
-            if (klines15m[i].timestamp > time5) return i - 1;
+          const time5 = data5m[k5].timestamp;
+          for (let i = 0; i < data15m.length; i++) {
+            if (data15m[i].timestamp > time5) return i - 1;
           }
-          return klines15m.length - 1;
+          return data15m.length - 1;
         };
 
-        for (let i = 1; i < klines5m.length; i++) {
+        for (let i = 1; i < data5m.length; i++) {
           if (inPosition && currentPosition) {
-            const current = klines5m[i];
-            const { stopLoss, takeProfit1, takeProfit2, direction } = currentPosition;
+            const current = data5m[i];
+            const { stopLoss, takeProfit1, direction } = currentPosition;
 
             let exitPrice = null;
             let exitReason = "";
@@ -895,29 +895,17 @@ export default function CryptoBacktestTool() {
               if (current.low <= stopLoss) {
                 exitPrice = stopLoss;
                 exitReason = "止损";
-              } else if (current.high >= takeProfit2) {
-                exitPrice = takeProfit2;
-                exitReason = "止盈2R";
               } else if (current.high >= takeProfit1) {
-                currentPosition.stopLoss = currentPosition.entryPrice;
-                if (current.low <= currentPosition.stopLoss) {
-                  exitPrice = currentPosition.stopLoss;
-                  exitReason = "移动止损";
-                }
+                exitPrice = takeProfit1;
+                exitReason = "止盈";
               }
             } else {
               if (current.high >= stopLoss) {
                 exitPrice = stopLoss;
                 exitReason = "止损";
-              } else if (current.low <= takeProfit2) {
-                exitPrice = takeProfit2;
-                exitReason = "止盈2R";
               } else if (current.low <= takeProfit1) {
-                currentPosition.stopLoss = currentPosition.entryPrice;
-                if (current.high >= currentPosition.stopLoss) {
-                  exitPrice = currentPosition.stopLoss;
-                  exitReason = "移动止损";
-                }
+                exitPrice = takeProfit1;
+                exitReason = "止盈";
               }
             }
 
@@ -967,18 +955,18 @@ export default function CryptoBacktestTool() {
           const index15m = get15mIndex(i);
           if (index15m < 0) continue;
 
-          const trendDirection = getTrendDirection(index15m, emaShort15m, emaLong15m, volumeMA15m);
+          const trendDirection = getTrendDirection(data15m, index15m, emaShort15m, emaLong15m, volumeMA15m);
 
           if (trendDirection === "none") continue;
 
-          const { signal, type } = checkEntrySignal(i, trendDirection, emaShort5m, emaLong5m, rsi5m);
+          const { signal, type } = checkEntrySignal(data5m, i, trendDirection, emaShort5m, emaLong5m, rsi5m);
 
           if (signal) {
-            const current = klines5m[i];
+            const current = data5m[i];
             const entryPrice = current.close;
             const stopLoss = type === "long"
-              ? Math.min(current.low, klines5m[i - 1].low) * (1 - params.stopLossPercent / 100)
-              : Math.max(current.high, klines5m[i - 1].high) * (1 + params.stopLossPercent / 100);
+              ? Math.min(current.low, data5m[i - 1].low) * (1 - params.stopLossPercent / 100)
+              : Math.max(current.high, data5m[i - 1].high) * (1 + params.stopLossPercent / 100);
 
             const takeProfit = type === "long"
               ? entryPrice * (1 + params.takeProfitPercent / 100)
