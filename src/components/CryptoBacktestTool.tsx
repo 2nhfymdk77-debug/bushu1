@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState } from "react";
 import CandlestickChart from "./CandlestickChart";
 
 // 类型定义
@@ -24,13 +24,13 @@ interface Trade {
   takeProfit2: number;
   pnl: number;
   pnlPercent: number;
-  entryFee: number;      // 开仓手续费
-  exitFee: number;       // 平仓手续费
-  totalFee: number;      // 总手续费
-  netPnl: number;        // 净收益（扣除手续费后）
-  positionSize: number;   // 仓位金额（USDT）
-  quantity: number;      // 交易数量
-  leverage: number;      // 杠杆倍数
+  entryFee: number;
+  exitFee: number;
+  totalFee: number;
+  netPnl: number;
+  positionSize: number;
+  quantity: number;
+  leverage: number;
   reason: string;
 }
 
@@ -41,19 +41,19 @@ interface BacktestResult {
   winRate: number;
   totalProfit: number;
   totalLoss: number;
-  grossProfit: number;     // 毛利润（未扣除手续费）
-  totalFees: number;       // 总手续费
-  netProfit: number;       // 净利润（扣除手续费后）
-  totalReturnRate: number;  // 总收益率（%）
-  netReturnRate: number;   // 净收益率（%）（扣除手续费后）
-  annualizedReturn: number; // 年化收益率（%）
+  grossProfit: number;
+  totalFees: number;
+  netProfit: number;
+  totalReturnRate: number;
+  netReturnRate: number;
+  annualizedReturn: number;
   avgWin: number;
   avgLoss: number;
   profitFactor: number;
   maxDrawdown: number;
   trades: Trade[];
-  initialCapital: number;  // 初始资金
-  finalCapital: number;    // 最终资金
+  initialCapital: number;
+  finalCapital: number;
 }
 
 export interface StrategyParams {
@@ -67,10 +67,13 @@ export interface StrategyParams {
   leverage: number;
   riskPercent: number;
   minTrendDistance: number;
-  initialCapital: number;   // 初始资金（USDT）
-  maxPositionPercent: number;  // 单笔最大仓位（%）
-  makerFee: number;        // 挂单手续费率（%）
-  takerFee: number;        // 吃单手续费率（%）
+  initialCapital: number;
+  maxPositionPercent: number;
+  makerFee: number;
+  takerFee: number;
+  symbol: string;
+  startDate: string;
+  endDate: string;
 }
 
 export const DEFAULT_PARAMS: StrategyParams = {
@@ -84,32 +87,542 @@ export const DEFAULT_PARAMS: StrategyParams = {
   leverage: 3,
   riskPercent: 2,
   minTrendDistance: 0.15,
-  initialCapital: 10000,   // 默认10000 USDT
-  maxPositionPercent: 30,  // 单笔最大30%仓位
-  makerFee: 0.02,          // 币安普通用户挂单费率
-  takerFee: 0.05,          // 币安普通用户吃单费率
+  initialCapital: 10000,
+  maxPositionPercent: 30,
+  makerFee: 0.02,
+  takerFee: 0.05,
+  symbol: "BTCUSDT",
+  startDate: "",
+  endDate: "",
 };
 
+// 策略定义
+const STRATEGIES = [
+  {
+    id: "ema_trend_pullback",
+    name: "15分钟趋势 + 5分钟回调策略",
+    description: "基于EMA趋势识别和5分钟回调信号的经典策略，适合趋势明显的市场。",
+    icon: "📈",
+    params: ["emaShort", "emaLong", "rsiPeriod", "volumePeriod", "stopLossPercent", "riskReward1", "riskReward2", "leverage", "minTrendDistance"]
+  },
+  {
+    id: "rsi_reversal",
+    name: "RSI超买超卖反转策略",
+    description: "利用RSI指标识别超买超卖区域，捕捉价格反转机会。",
+    icon: "🔄",
+    params: ["rsiPeriod", "stopLossPercent", "riskReward1", "riskReward2", "leverage"]
+  },
+  {
+    id: "breakout",
+    name: "突破策略",
+    description: "识别关键支撑阻力位的突破，捕捉趋势启动信号。",
+    icon: "🚀",
+    params: ["volumePeriod", "stopLossPercent", "riskReward1", "riskReward2", "leverage"]
+  }
+];
+
 export default function CryptoBacktestTool() {
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [selectedStrategy, setSelectedStrategy] = useState(STRATEGIES[0].id);
   const [params, setParams] = useState<StrategyParams>(DEFAULT_PARAMS);
+  const [result, setResult] = useState<BacktestResult | null>(null);
   const [klines15m, setKlines15m] = useState<KLine[]>([]);
   const [klines5m, setKlines5m] = useState<KLine[]>([]);
   const [emaShort15m, setEmaShort15m] = useState<number[]>([]);
   const [emaLong15m, setEmaLong15m] = useState<number[]>([]);
-  const [result, setResult] = useState<BacktestResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showTrades, setShowTrades] = useState(false);
 
-  // 生成模拟数据
-  const generateMockData = () => {
+  // 获取当前策略
+  const currentStrategy = STRATEGIES.find(s => s.id === selectedStrategy);
+
+  // 步骤1：选择策略
+  if (step === 1) {
+    return (
+      <div className="animate-fadeIn">
+        <div className="text-center mb-8">
+          <h2 className="text-2xl font-bold mb-2">选择回测策略</h2>
+          <p className="text-gray-400">选择一个策略开始回测</p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          {STRATEGIES.map((strategy) => (
+            <div
+              key={strategy.id}
+              onClick={() => setSelectedStrategy(strategy.id)}
+              className={`cursor-pointer rounded-xl p-6 border-2 transition-all ${
+                selectedStrategy === strategy.id
+                  ? "border-blue-500 bg-blue-500/10"
+                  : "border-gray-700 bg-gray-800 hover:border-gray-600"
+              }`}
+            >
+              <div className="text-4xl mb-4">{strategy.icon}</div>
+              <h3 className="text-lg font-bold mb-2">{strategy.name}</h3>
+              <p className="text-sm text-gray-400">{strategy.description}</p>
+              {selectedStrategy === strategy.id && (
+                <div className="mt-4 flex items-center text-blue-400 text-sm">
+                  <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                  </svg>
+                  已选择
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="flex justify-end">
+          <button
+            onClick={() => setStep(2)}
+            className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-all"
+          >
+            下一步：配置参数
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 步骤2：配置参数
+  if (step === 2) {
+    return (
+      <div className="animate-fadeIn">
+        <div className="mb-6">
+          <button
+            onClick={() => setStep(1)}
+            className="text-gray-400 hover:text-white text-sm mb-2"
+          >
+            ← 返回选择策略
+          </button>
+          <h2 className="text-2xl font-bold mb-2">配置回测参数</h2>
+          <p className="text-gray-400">当前策略：{currentStrategy?.name}</p>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* 策略参数 */}
+          <div className="bg-gray-800 rounded-lg p-6">
+            <h3 className="text-lg font-bold mb-4 flex items-center">
+              <span className="text-xl mr-2">⚙️</span>
+              策略参数
+            </h3>
+            <div className="space-y-4">
+              {currentStrategy?.params.includes("emaShort") && (
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">EMA短期周期</label>
+                  <input
+                    type="number"
+                    value={params.emaShort}
+                    onChange={(e) => setParams({ ...params, emaShort: Number(e.target.value) })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+              )}
+              {currentStrategy?.params.includes("emaLong") && (
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">EMA长期周期</label>
+                  <input
+                    type="number"
+                    value={params.emaLong}
+                    onChange={(e) => setParams({ ...params, emaLong: Number(e.target.value) })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+              )}
+              {currentStrategy?.params.includes("rsiPeriod") && (
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">RSI周期</label>
+                  <input
+                    type="number"
+                    value={params.rsiPeriod}
+                    onChange={(e) => setParams({ ...params, rsiPeriod: Number(e.target.value) })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+              )}
+              {currentStrategy?.params.includes("volumePeriod") && (
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">成交量周期</label>
+                  <input
+                    type="number"
+                    value={params.volumePeriod}
+                    onChange={(e) => setParams({ ...params, volumePeriod: Number(e.target.value) })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+              )}
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">止损比例 (%)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={params.stopLossPercent}
+                  onChange={(e) => setParams({ ...params, stopLossPercent: Number(e.target.value) })}
+                  className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">止盈1R (倍数)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={params.riskReward1}
+                    onChange={(e) => setParams({ ...params, riskReward1: Number(e.target.value) })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">止盈2R (倍数)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={params.riskReward2}
+                    onChange={(e) => setParams({ ...params, riskReward2: Number(e.target.value) })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+              </div>
+              {currentStrategy?.params.includes("leverage") && (
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">杠杆倍数</label>
+                  <input
+                    type="number"
+                    value={params.leverage}
+                    onChange={(e) => setParams({ ...params, leverage: Number(e.target.value) })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+              )}
+              {currentStrategy?.params.includes("minTrendDistance") && (
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">最小趋势距离 (%)</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    value={params.minTrendDistance}
+                    onChange={(e) => setParams({ ...params, minTrendDistance: Number(e.target.value) })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 交易与回测参数 */}
+          <div className="space-y-6">
+            <div className="bg-gray-800 rounded-lg p-6">
+              <h3 className="text-lg font-bold mb-4 flex items-center">
+                <span className="text-xl mr-2">💰</span>
+                仓位管理
+              </h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">初始资金 (USDT)</label>
+                  <input
+                    type="number"
+                    value={params.initialCapital}
+                    onChange={(e) => setParams({ ...params, initialCapital: Number(e.target.value) })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">单笔最大仓位 (%)</label>
+                  <input
+                    type="number"
+                    value={params.maxPositionPercent}
+                    onChange={(e) => setParams({ ...params, maxPositionPercent: Number(e.target.value) })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-gray-800 rounded-lg p-6">
+              <h3 className="text-lg font-bold mb-4 flex items-center">
+                <span className="text-xl mr-2">💸</span>
+                交易成本 (币安普通用户)
+              </h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">挂单费率 (%)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={params.makerFee}
+                    onChange={(e) => setParams({ ...params, makerFee: Number(e.target.value) })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">吃单费率 (%)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={params.takerFee}
+                    onChange={(e) => setParams({ ...params, takerFee: Number(e.target.value) })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-gray-800 rounded-lg p-6">
+              <h3 className="text-lg font-bold mb-4 flex items-center">
+                <span className="text-xl mr-2">📅</span>
+                回测范围
+              </h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">交易对</label>
+                  <input
+                    type="text"
+                    value={params.symbol}
+                    onChange={(e) => setParams({ ...params, symbol: e.target.value })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">开始日期</label>
+                    <input
+                      type="date"
+                      value={params.startDate}
+                      onChange={(e) => setParams({ ...params, startDate: e.target.value })}
+                      className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">结束日期</label>
+                    <input
+                      type="date"
+                      value={params.endDate}
+                      onChange={(e) => setParams({ ...params, endDate: e.target.value })}
+                      className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-between mt-6">
+          <button
+            onClick={() => {
+              setParams(DEFAULT_PARAMS);
+            }}
+            className="px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white font-medium rounded-lg transition-all"
+          >
+            重置参数
+          </button>
+          <button
+            onClick={() => {
+              setStep(3);
+              runBacktest();
+            }}
+            className="px-8 py-3 bg-green-600 hover:bg-green-700 text-white font-medium rounded-lg transition-all"
+          >
+            🚀 开始回测
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 步骤3：显示结果
+  return (
+    <div className="animate-fadeIn">
+      <div className="mb-6">
+        <button
+          onClick={() => setStep(2)}
+          className="text-gray-400 hover:text-white text-sm mb-2"
+        >
+          ← 返回配置参数
+        </button>
+        <h2 className="text-2xl font-bold mb-2">回测结果</h2>
+        <p className="text-gray-400">策略：{currentStrategy?.name}</p>
+      </div>
+
+      {isLoading ? (
+        <div className="bg-gray-800 rounded-lg p-12 text-center">
+          <div className="animate-spin w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+          <p className="text-gray-400">回测进行中...</p>
+        </div>
+      ) : result ? (
+        <div className="space-y-6">
+          {/* 统计卡片 */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-gray-800 rounded-lg p-4">
+              <p className="text-sm text-gray-400">总交易次数</p>
+              <p className="text-2xl font-bold">{result.totalTrades}</p>
+            </div>
+            <div className="bg-gray-800 rounded-lg p-4">
+              <p className="text-sm text-gray-400">胜率</p>
+              <p className={`text-2xl font-bold ${result.winRate >= 50 ? "text-green-500" : "text-red-500"}`}>
+                {formatNumber(result.winRate)}%
+              </p>
+            </div>
+            <div className="bg-gray-800 rounded-lg p-4">
+              <p className="text-sm text-gray-400">净收益率</p>
+              <p className={`text-2xl font-bold ${result.netReturnRate >= 0 ? "text-green-500" : "text-red-500"}`}>
+                {formatNumber(result.netReturnRate)}%
+              </p>
+            </div>
+            <div className="bg-gray-800 rounded-lg p-4">
+              <p className="text-sm text-gray-400">最终资金</p>
+              <p className="text-2xl font-bold">
+                {formatNumber(result.finalCapital, 2)}
+              </p>
+            </div>
+          </div>
+
+          {/* K线图 */}
+          <div className="bg-gray-800 rounded-lg p-6">
+            <h3 className="text-lg font-bold mb-4">K线图</h3>
+            <CandlestickChart
+              klines={klines15m}
+              emaShort={emaShort15m}
+              emaLong={emaLong15m}
+              trades={result.trades}
+              height={500}
+            />
+          </div>
+
+          {/* 详细统计 */}
+          <div className="bg-gray-800 rounded-lg p-6">
+            <h3 className="text-lg font-bold mb-4">详细统计</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <p className="text-sm text-gray-400">初始资金</p>
+                <p className="font-semibold">{formatNumber(result.initialCapital, 2)} USDT</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-400">最终资金</p>
+                <p className={`font-semibold ${result.finalCapital >= result.initialCapital ? "text-green-500" : "text-red-500"}`}>
+                  {formatNumber(result.finalCapital, 2)} USDT
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-400">毛利润</p>
+                <p className={`font-semibold ${result.grossProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
+                  {formatNumber(result.grossProfit)}%
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-400">总手续费</p>
+                <p className="text-yellow-500 font-semibold">{formatNumber(result.totalFees, 2)} USDT</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-400">净利润</p>
+                <p className={`font-semibold ${result.netProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
+                  {formatNumber(result.netProfit, 2)} USDT
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-400">净收益率</p>
+                <p className={`font-semibold ${result.netReturnRate >= 0 ? "text-green-500" : "text-red-500"}`}>
+                  {formatNumber(result.netReturnRate)}%
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-400">年化收益率</p>
+                <p className={`font-semibold ${result.annualizedReturn >= 0 ? "text-green-500" : "text-red-500"}`}>
+                  {formatNumber(result.annualizedReturn)}%
+                </p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-400">最大回撤</p>
+                <p className="text-yellow-500 font-semibold">{formatNumber(result.maxDrawdown)}%</p>
+              </div>
+            </div>
+          </div>
+
+          {/* 交易明细 */}
+          <div className="bg-gray-800 rounded-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold">交易明细</h3>
+              <button
+                onClick={() => setShowTrades(!showTrades)}
+                className="text-sm text-blue-400 hover:text-blue-300"
+              >
+                {showTrades ? "收起" : "展开"}
+              </button>
+            </div>
+
+            {showTrades && (
+              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-700 sticky top-0">
+                    <tr>
+                      <th className="px-2 py-2 text-left whitespace-nowrap">序号</th>
+                      <th className="px-2 py-2 text-left whitespace-nowrap">方向</th>
+                      <th className="px-2 py-2 text-left whitespace-nowrap">仓位</th>
+                      <th className="px-2 py-2 text-left whitespace-nowrap">杠杆</th>
+                      <th className="px-2 py-2 text-left whitespace-nowrap">进场价</th>
+                      <th className="px-2 py-2 text-left whitespace-nowrap">出场价</th>
+                      <th className="px-2 py-2 text-left whitespace-nowrap">毛盈亏</th>
+                      <th className="px-2 py-2 text-left whitespace-nowrap">手续费</th>
+                      <th className="px-2 py-2 text-left whitespace-nowrap">净盈亏</th>
+                      <th className="px-2 py-2 text-left whitespace-nowrap">原因</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.trades.map((trade, index) => (
+                      <tr key={index} className="border-t border-gray-700 hover:bg-gray-700/50">
+                        <td className="px-2 py-2">{index + 1}</td>
+                        <td className="px-2 py-2">
+                          <span className={`px-2 py-1 rounded text-xs ${trade.direction === "long" ? "bg-green-600" : "bg-red-600"}`}>
+                            {trade.direction === "long" ? "做多" : "做空"}
+                          </span>
+                        </td>
+                        <td className="px-2 py-2">{formatNumber(trade.positionSize, 0)} USDT</td>
+                        <td className="px-2 py-2">{trade.leverage}x</td>
+                        <td className="px-2 py-2">{formatNumber(trade.entryPrice, 2)}</td>
+                        <td className="px-2 py-2">{formatNumber(trade.exitPrice, 2)}</td>
+                        <td className={`px-2 py-2 font-semibold ${trade.pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                          {formatNumber(trade.pnl, 2)}%
+                        </td>
+                        <td className="px-2 py-2 text-yellow-500">
+                          {formatNumber(trade.totalFee, 2)} USDT
+                        </td>
+                        <td className={`px-2 py-2 font-semibold ${trade.netPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                          {formatNumber(trade.netPnl, 2)} USDT
+                        </td>
+                        <td className="px-2 py-2">{trade.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-center">
+            <button
+              onClick={() => {
+                setResult(null);
+                setStep(1);
+              }}
+              className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-all"
+            >
+              🔄 新建回测
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  // 回测逻辑函数
+  function generateMockData() {
     const now = Date.now();
     const data15m: KLine[] = [];
     const data5m: KLine[] = [];
-    
+
     let price = 50000;
     const volatility = 0.002;
-    
-    // 生成15分钟数据（30天）
+
+    // 生成15分钟数据
     for (let i = 0; i < 2880; i++) {
       const time = now - (2880 - i) * 15 * 60 * 1000;
       const change = (Math.random() - 0.48) * 2 * volatility * price;
@@ -118,12 +631,12 @@ export default function CryptoBacktestTool() {
       const high = Math.max(open, close) + Math.random() * volatility * price;
       const low = Math.min(open, close) - Math.random() * volatility * price;
       const volume = Math.random() * 1000000000 + 500000000;
-      
+
       data15m.push({ timestamp: time, open, high, low, close, volume });
       price = close;
     }
-    
-    // 生成5分钟数据（与15分钟对应）
+
+    // 生成5分钟数据
     price = data15m[0].open;
     for (let i = 0; i < 8640; i++) {
       const time = now - (8640 - i) * 5 * 60 * 1000;
@@ -133,43 +646,38 @@ export default function CryptoBacktestTool() {
       const high = Math.max(open, close) + Math.random() * volatility * price * 0.5;
       const low = Math.min(open, close) - Math.random() * volatility * price * 0.5;
       const volume = Math.random() * 300000000 + 150000000;
-      
+
       data5m.push({ timestamp: time, open, high, low, close, volume });
       price = close;
     }
-    
+
     setKlines15m(data15m);
     setKlines5m(data5m);
     return { data15m, data5m };
-  };
+  }
 
-  // 计算EMA
-  const calculateEMA = (data: KLine[], period: number): number[] => {
+  function calculateEMA(data: KLine[], period: number): number[] {
     const ema: number[] = new Array(data.length).fill(0);
     const multiplier = 2 / (period + 1);
 
-    // 计算第一个EMA值（使用SMA）
     let sum = 0;
     for (let i = 0; i < period && i < data.length; i++) {
       sum += data[i].close;
     }
     ema[period - 1] = sum / Math.min(period, data.length);
 
-    // 填充前面的值（使用第一个EMA值）
     for (let i = 0; i < period - 1; i++) {
       ema[i] = ema[period - 1];
     }
 
-    // 后续EMA值
     for (let i = period; i < data.length; i++) {
       ema[i] = (data[i].close - ema[i - 1]) * multiplier + ema[i - 1];
     }
 
     return ema;
-  };
+  }
 
-  // 计算RSI
-  const calculateRSI = (data: KLine[], period: number): number[] => {
+  function calculateRSI(data: KLine[], period: number): number[] {
     const rsi: number[] = new Array(data.length).fill(50);
     const gains: number[] = [];
     const losses: number[] = [];
@@ -184,11 +692,9 @@ export default function CryptoBacktestTool() {
       return rsi;
     }
 
-    // 初始平均
     let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
     let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
 
-    // 计算第一个RSI值
     let firstRSI: number;
     if (avgLoss === 0) {
       firstRSI = 100;
@@ -198,7 +704,6 @@ export default function CryptoBacktestTool() {
     }
     rsi[period] = firstRSI;
 
-    // 后续RSI值
     for (let i = period; i < gains.length; i++) {
       avgGain = (avgGain * (period - 1) + gains[i]) / period;
       avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
@@ -208,10 +713,9 @@ export default function CryptoBacktestTool() {
     }
 
     return rsi;
-  };
+  }
 
-  // 计算成交量均值
-  const calculateVolumeMA = (data: KLine[], period: number): number[] => {
+  function calculateVolumeMA(data: KLine[], period: number): number[] {
     const ma: number[] = [];
     for (let i = 0; i < data.length; i++) {
       const start = Math.max(0, i - period + 1);
@@ -220,26 +724,22 @@ export default function CryptoBacktestTool() {
       ma.push(avg);
     }
     return ma;
-  };
+  }
 
-  // 15分钟趋势判断
-  const getTrendDirection = (index: number, emaShort: number[], emaLong: number[], volumeMA: number[]): "long" | "short" | "none" => {
+  function getTrendDirection(index: number, emaShort: number[], emaLong: number[], volumeMA: number[]): "long" | "short" | "none" {
     if (index < params.emaLong) return "none";
-    
+
     const emaS = emaShort[index];
     const emaL = emaLong[index];
     const close = klines15m[index].close;
     const volume = klines15m[index].volume;
     const volMA = volumeMA[index];
-    
-    // 检查趋势距离
+
     const distance = Math.abs(emaS - emaL) / emaL * 100;
     if (distance < params.minTrendDistance) return "none";
-    
-    // 多头条件
+
     const bullish = emaS > emaL && close > emaS && volume >= volMA;
     if (bullish) {
-      // 检查最近3根K线是否跌破EMA60
       let valid = true;
       for (let i = 1; i <= 3 && index - i >= 0; i++) {
         if (klines15m[index - i].close < emaLong[index - i]) {
@@ -249,8 +749,7 @@ export default function CryptoBacktestTool() {
       }
       if (valid) return "long";
     }
-    
-    // 空头条件
+
     const bearish = emaS < emaL && close < emaS && volume >= volMA;
     if (bearish) {
       let valid = true;
@@ -262,14 +761,13 @@ export default function CryptoBacktestTool() {
       }
       if (valid) return "short";
     }
-    
-    return "none";
-  };
 
-  // 5分钟进场逻辑
-  const checkEntrySignal = (index: number, trendDirection: "long" | "short", emaShort5m: number[], emaLong5m: number[], rsi5m: number[]): { signal: boolean, type: "long" | "short" } => {
+    return "none";
+  }
+
+  function checkEntrySignal(index: number, trendDirection: "long" | "short", emaShort5m: number[], emaLong5m: number[], rsi5m: number[]): { signal: boolean, type: "long" | "short" } {
     if (index < params.emaLong + 10) return { signal: false, type: trendDirection };
-    
+
     const current = klines5m[index];
     const prev = klines5m[index - 1];
     const prev2 = klines5m[index - 2];
@@ -277,57 +775,46 @@ export default function CryptoBacktestTool() {
     const emaL = emaLong5m[index];
     const rsi = rsi5m[index];
     const rsiPrev = rsi5m[index - 1];
-    
+
     if (trendDirection === "long") {
-      // 做多条件：价格回踩EMA20或EMA60后重新站上
       const touchedEma = prev.low <= emaS || prev.low <= emaL;
       const recovered = current.close > emaS;
       const rsiUp = rsi > rsiPrev && rsi < 70;
       const bullishCandle = current.close > current.open && current.close > prev.close;
-      
+
       if (touchedEma && recovered && (rsiUp || bullishCandle)) {
         return { signal: true, type: "long" };
       }
     } else {
-      // 做空条件：价格反弹EMA20或EMA60后重新跌破
       const touchedEma = prev.high >= emaS || prev.high >= emaL;
       const brokeDown = current.close < emaS;
       const rsiDown = rsi < rsiPrev && rsi > 30;
       const bearishCandle = current.close < current.open && current.close < prev.close;
-      
+
       if (touchedEma && brokeDown && (rsiDown || bearishCandle)) {
         return { signal: true, type: "short" };
       }
     }
-    
-    return { signal: false, type: trendDirection };
-  };
 
-  // 运行回测
-  const runBacktest = () => {
-    if (klines15m.length === 0 || klines5m.length === 0) {
-      alert("请先生成或导入数据");
-      return;
-    }
-    
-    setIsLoading(true);
-    setResult(null);
-    
+    return { signal: false, type: trendDirection };
+  }
+
+  function runBacktest() {
+    const { data15m, data5m } = generateMockData();
+
     setTimeout(() => {
       try {
-        // 计算指标
         const emaShort15m = calculateEMA(klines15m, params.emaShort);
         const emaLong15m = calculateEMA(klines15m, params.emaLong);
         const volumeMA15m = calculateVolumeMA(klines15m, params.volumePeriod);
         const emaShort5m = calculateEMA(klines5m, params.emaShort);
         const emaLong5m = calculateEMA(klines5m, params.emaLong);
         const rsi5m = calculateRSI(klines5m, params.rsiPeriod);
-        
+
         const trades: Trade[] = [];
         let inPosition = false;
         let currentPosition: Trade | null = null;
-        
-        // 找到5分钟K线对应的15分钟趋势
+
         const get15mIndex = (k5: number): number => {
           const time5 = klines5m[k5].timestamp;
           for (let i = 0; i < klines15m.length; i++) {
@@ -335,17 +822,15 @@ export default function CryptoBacktestTool() {
           }
           return klines15m.length - 1;
         };
-        
-        // 遍历5分钟K线
+
         for (let i = 1; i < klines5m.length; i++) {
           if (inPosition && currentPosition) {
-            // 检查止损止盈
             const current = klines5m[i];
             const { stopLoss, takeProfit1, takeProfit2, direction } = currentPosition;
-            
+
             let exitPrice = null;
             let exitReason = "";
-            
+
             if (direction === "long") {
               if (current.low <= stopLoss) {
                 exitPrice = stopLoss;
@@ -354,7 +839,6 @@ export default function CryptoBacktestTool() {
                 exitPrice = takeProfit2;
                 exitReason = "止盈2R";
               } else if (current.high >= takeProfit1) {
-                // 移动止损到进场价
                 currentPosition.stopLoss = currentPosition.entryPrice;
                 if (current.low <= currentPosition.stopLoss) {
                   exitPrice = currentPosition.stopLoss;
@@ -376,33 +860,26 @@ export default function CryptoBacktestTool() {
                 }
               }
             }
-            
+
             if (exitPrice) {
               const entryPrice = currentPosition.entryPrice;
               const direction = currentPosition.direction;
               const leverage = params.leverage;
 
-              // 计算仓位金额（USDT）
               const positionSize = params.initialCapital * (params.maxPositionPercent / 100);
               const quantity = positionSize / entryPrice;
 
-              // 计算毛收益（未扣除手续费）
               const grossPnl = direction === "long"
                 ? (exitPrice - entryPrice) / entryPrice * 100 * leverage
                 : (entryPrice - exitPrice) / entryPrice * 100 * leverage;
 
-              // 计算开仓和平仓手续费（假设都是吃单单）
-              // 开仓手续费 = 仓位金额 * 费率
               const entryFee = positionSize * (params.takerFee / 100);
               const exitFee = positionSize * (params.takerFee / 100);
               const totalFee = entryFee + exitFee;
 
-              // 计算净收益（扣除手续费后）
-              // 净收益（USDT）= 毛收益（USDT）- 总手续费
               const grossPnlUsdt = positionSize * (grossPnl / 100);
               const netPnlUsdt = grossPnlUsdt - totalFee;
 
-              // 净收益率
               const netPnlPercent = (netPnlUsdt / positionSize) * 100;
 
               trades.push({
@@ -426,18 +903,16 @@ export default function CryptoBacktestTool() {
             }
             continue;
           }
-          
-          // 获取15分钟趋势方向
+
           const index15m = get15mIndex(i);
           if (index15m < 0) continue;
-          
+
           const trendDirection = getTrendDirection(index15m, emaShort15m, emaLong15m, volumeMA15m);
-          
+
           if (trendDirection === "none") continue;
-          
-          // 检查5分钟进场信号
+
           const { signal, type } = checkEntrySignal(i, trendDirection, emaShort5m, emaLong5m, rsi5m);
-          
+
           if (signal) {
             const current = klines5m[i];
             const entryPrice = current.close;
@@ -453,7 +928,6 @@ export default function CryptoBacktestTool() {
               ? entryPrice * (1 + riskAmount * params.riskReward2 / 100)
               : entryPrice * (1 - riskAmount * params.riskReward2 / 100);
 
-            // 计算仓位金额和数量
             const positionSize = params.initialCapital * (params.maxPositionPercent / 100);
             const quantity = positionSize / entryPrice;
 
@@ -481,39 +955,32 @@ export default function CryptoBacktestTool() {
             inPosition = true;
           }
         }
-        
-        // 统计结果
+
         const winningTrades = trades.filter(t => t.pnl > 0);
         const losingTrades = trades.filter(t => t.pnl <= 0);
 
         const totalProfit = winningTrades.reduce((sum, t) => sum + t.pnl, 0);
         const totalLoss = Math.abs(losingTrades.reduce((sum, t) => sum + t.pnl, 0));
 
-        // 毛利润（未扣除手续费）
         const grossProfit = totalProfit - totalLoss;
 
-        // 总手续费
         const totalFees = trades.reduce((sum, t) => sum + t.totalFee, 0);
 
-        // 净利润（扣除手续费后，USDT）
         const netProfitUsdt = trades.reduce((sum, t) => sum + t.netPnl, 0);
 
-        // 净收益率（%）
         const netReturnRate = (netProfitUsdt / params.initialCapital) * 100;
 
         let maxDrawdown = 0;
         let peak = 0;
         let cumulative = 0;
         trades.forEach(t => {
-          cumulative += t.netPnl;  // 使用净收益计算回撤
+          cumulative += t.netPnl;
           peak = Math.max(peak, cumulative);
           maxDrawdown = Math.max(maxDrawdown, peak - cumulative);
         });
 
-        // 计算总收益率（净收益相对于初始资金）
         const totalReturnRate = netReturnRate;
 
-        // 计算年化收益率
         let annualizedReturn = 0;
         if (trades.length > 0) {
           const firstEntryTime = trades[0].entryTime;
@@ -526,10 +993,8 @@ export default function CryptoBacktestTool() {
           }
         }
 
-        // 最终资金
         const finalCapital = params.initialCapital + netProfitUsdt;
 
-        // 保存EMA数据用于图表展示
         setEmaShort15m(emaShort15m);
         setEmaLong15m(emaLong15m);
 
@@ -549,7 +1014,7 @@ export default function CryptoBacktestTool() {
           avgWin: winningTrades.length > 0 ? totalProfit / winningTrades.length : 0,
           avgLoss: losingTrades.length > 0 ? totalLoss / losingTrades.length : 0,
           profitFactor: totalLoss > 0 ? totalProfit / totalLoss : totalProfit > 0 ? Infinity : 0,
-          maxDrawdown: (maxDrawdown / params.initialCapital) * 100,  // 转换为百分比
+          maxDrawdown: (maxDrawdown / params.initialCapital) * 100,
           trades,
           initialCapital: params.initialCapital,
           finalCapital,
@@ -561,413 +1026,9 @@ export default function CryptoBacktestTool() {
         setIsLoading(false);
       }
     }, 100);
-  };
+  }
 
-  // 格式化时间
-  const formatTime = (timestamp: number) => {
-    const date = new Date(timestamp);
-    return date.toLocaleString("zh-CN");
-  };
-
-  // 格式化数字
-  const formatNumber = (num: number, decimals: number = 2) => {
+  function formatNumber(num: number, decimals: number = 2) {
     return num.toFixed(decimals);
-  };
-
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* 参数配置区 */}
-      <div className="bg-gray-800 rounded-lg p-6">
-        <h2 className="text-xl font-bold mb-4">参数配置</h2>
-        
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">EMA短期周期</label>
-            <input
-              type="number"
-              value={params.emaShort}
-              onChange={(e) => setParams({ ...params, emaShort: Number(e.target.value) })}
-              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">EMA长期周期</label>
-            <input
-              type="number"
-              value={params.emaLong}
-              onChange={(e) => setParams({ ...params, emaLong: Number(e.target.value) })}
-              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">RSI周期</label>
-            <input
-              type="number"
-              value={params.rsiPeriod}
-              onChange={(e) => setParams({ ...params, rsiPeriod: Number(e.target.value) })}
-              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">止损比例 (%)</label>
-            <input
-              type="number"
-              step="0.1"
-              value={params.stopLossPercent}
-              onChange={(e) => setParams({ ...params, stopLossPercent: Number(e.target.value) })}
-              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">止盈1R (倍数)</label>
-            <input
-              type="number"
-              step="0.5"
-              value={params.riskReward1}
-              onChange={(e) => setParams({ ...params, riskReward1: Number(e.target.value) })}
-              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">止盈2R (倍数)</label>
-            <input
-              type="number"
-              step="0.5"
-              value={params.riskReward2}
-              onChange={(e) => setParams({ ...params, riskReward2: Number(e.target.value) })}
-              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">杠杆倍数</label>
-            <input
-              type="number"
-              value={params.leverage}
-              onChange={(e) => setParams({ ...params, leverage: Number(e.target.value) })}
-              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-            />
-          </div>
-          
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">最小趋势距离 (%)</label>
-            <input
-              type="number"
-              step="0.05"
-              value={params.minTrendDistance}
-              onChange={(e) => setParams({ ...params, minTrendDistance: Number(e.target.value) })}
-              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-            />
-          </div>
-
-          <div className="border-t border-gray-700 pt-4 mt-4">
-            <h3 className="text-sm font-semibold text-gray-300 mb-3">仓位管理</h3>
-          </div>
-
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">初始资金 (USDT)</label>
-            <input
-              type="number"
-              value={params.initialCapital}
-              onChange={(e) => setParams({ ...params, initialCapital: Number(e.target.value) })}
-              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">单笔最大仓位 (%)</label>
-            <input
-              type="number"
-              value={params.maxPositionPercent}
-              onChange={(e) => setParams({ ...params, maxPositionPercent: Number(e.target.value) })}
-              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-            />
-          </div>
-
-          <div className="border-t border-gray-700 pt-4 mt-4">
-            <h3 className="text-sm font-semibold text-gray-300 mb-3">交易成本 (币安普通用户)</h3>
-          </div>
-
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">挂单费率 Maker Fee (%)</label>
-            <input
-              type="number"
-              step="0.01"
-              value={params.makerFee}
-              onChange={(e) => setParams({ ...params, makerFee: Number(e.target.value) })}
-              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">吃单费率 Taker Fee (%)</label>
-            <input
-              type="number"
-              step="0.01"
-              value={params.takerFee}
-              onChange={(e) => setParams({ ...params, takerFee: Number(e.target.value) })}
-              className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-            />
-          </div>
-        </div>
-        
-        <div className="mt-6 space-y-3">
-          <button
-            onClick={generateMockData}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded transition"
-          >
-            生成模拟数据
-          </button>
-          
-          <button
-            onClick={runBacktest}
-            disabled={isLoading || klines15m.length === 0}
-            className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium py-2 rounded transition"
-          >
-            {isLoading ? "回测中..." : "运行回测"}
-          </button>
-          
-          <button
-            onClick={() => setParams(DEFAULT_PARAMS)}
-            className="w-full bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 rounded transition"
-          >
-            重置参数
-          </button>
-        </div>
-        
-        <div className="mt-4 text-sm text-gray-400">
-          <p>数据状态: {klines15m.length > 0 ? `已加载 (${klines15m.length}根15分钟K线)` : "未加载"}</p>
-        </div>
-      </div>
-      
-      {/* 结果展示区 */}
-      <div className="lg:col-span-2 space-y-6">
-        {result && (
-          <>
-            {/* 统计卡片 */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-gray-800 rounded-lg p-4">
-                <p className="text-sm text-gray-400">总交易次数</p>
-                <p className="text-2xl font-bold">{result.totalTrades}</p>
-              </div>
-              <div className="bg-gray-800 rounded-lg p-4">
-                <p className="text-sm text-gray-400">胜率</p>
-                <p className={`text-2xl font-bold ${result.winRate >= 50 ? "text-green-500" : "text-red-500"}`}>
-                  {formatNumber(result.winRate)}%
-                </p>
-              </div>
-              <div className="bg-gray-800 rounded-lg p-4">
-                <p className="text-sm text-gray-400">净收益率</p>
-                <p className={`text-2xl font-bold ${result.netReturnRate >= 0 ? "text-green-500" : "text-red-500"}`}>
-                  {formatNumber(result.netReturnRate)}%
-                </p>
-              </div>
-              <div className="bg-gray-800 rounded-lg p-4">
-                <p className="text-sm text-gray-400">最终资金</p>
-                <p className="text-2xl font-bold">
-                  {formatNumber(result.finalCapital, 2)}
-                </p>
-              </div>
-            </div>
-            
-            {/* K线图展示 */}
-            <div className="bg-gray-800 rounded-lg p-6">
-              <h3 className="text-lg font-bold mb-4">15分钟K线图 (含EMA指标和交易信号)</h3>
-              <CandlestickChart
-                klines={klines15m}
-                emaShort={emaShort15m}
-                emaLong={emaLong15m}
-                trades={result.trades}
-                height={500}
-              />
-              <div className="mt-4 flex gap-4 text-sm">
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-1 bg-blue-500"></div>
-                  <span className="text-gray-400">EMA{params.emaShort}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-1 bg-yellow-500"></div>
-                  <span className="text-gray-400">EMA{params.emaLong}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-1 bg-green-500"></div>
-                  <span className="text-gray-400">做多进场/盈利</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-1 bg-red-500"></div>
-                  <span className="text-gray-400">做空进场/亏损</span>
-                </div>
-              </div>
-            </div>
-            
-            {/* 详细统计 */}
-            <div className="bg-gray-800 rounded-lg p-6">
-              <h3 className="text-lg font-bold mb-4">详细统计</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div>
-                  <p className="text-sm text-gray-400">盈利交易</p>
-                  <p className="text-green-500 font-semibold">{result.winningTrades} 笔</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">亏损交易</p>
-                  <p className="text-red-500 font-semibold">{result.losingTrades} 笔</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">胜率</p>
-                  <p className={`font-semibold ${result.winRate >= 50 ? "text-green-500" : "text-red-500"}`}>
-                    {formatNumber(result.winRate)}%
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">初始资金</p>
-                  <p className="font-semibold">{formatNumber(result.initialCapital, 2)} USDT</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">最终资金</p>
-                  <p className={`font-semibold ${result.finalCapital >= result.initialCapital ? "text-green-500" : "text-red-500"}`}>
-                    {formatNumber(result.finalCapital, 2)} USDT
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">毛利润</p>
-                  <p className={`font-semibold ${result.grossProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
-                    {formatNumber(result.grossProfit)}%
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">总手续费</p>
-                  <p className="text-yellow-500 font-semibold">{formatNumber(result.totalFees, 2)} USDT</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">净利润</p>
-                  <p className={`font-semibold ${result.netProfit >= 0 ? "text-green-500" : "text-red-500"}`}>
-                    {formatNumber(result.netProfit, 2)} USDT
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">净收益率</p>
-                  <p className={`font-semibold ${result.netReturnRate >= 0 ? "text-green-500" : "text-red-500"}`}>
-                    {formatNumber(result.netReturnRate)}%
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">年化收益率</p>
-                  <p className={`font-semibold ${result.annualizedReturn >= 0 ? "text-green-500" : "text-red-500"}`}>
-                    {formatNumber(result.annualizedReturn)}%
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">平均盈利</p>
-                  <p className="text-green-500 font-semibold">{formatNumber(result.avgWin)}%</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">平均亏损</p>
-                  <p className="text-red-500 font-semibold">{formatNumber(result.avgLoss)}%</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">盈亏比</p>
-                  <p className="font-semibold">
-                    {result.profitFactor === Infinity ? "∞" : formatNumber(result.profitFactor)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">最大回撤</p>
-                  <p className="text-yellow-500 font-semibold">{formatNumber(result.maxDrawdown)}%</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-400">总收益率 (毛)</p>
-                  <p className={`font-semibold ${result.totalReturnRate >= 0 ? "text-green-500" : "text-red-500"}`}>
-                    {formatNumber(result.totalReturnRate)}%
-                  </p>
-                </div>
-              </div>
-            </div>
-            
-            {/* 交易明细 */}
-            <div className="bg-gray-800 rounded-lg p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold">交易明细</h3>
-                <button
-                  onClick={() => setShowTrades(!showTrades)}
-                  className="text-sm text-blue-400 hover:text-blue-300"
-                >
-                  {showTrades ? "收起" : "展开"}
-                </button>
-              </div>
-
-              {showTrades && (
-                <div className="overflow-x-auto max-h-96 overflow-y-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-700 sticky top-0">
-                      <tr>
-                        <th className="px-2 py-2 text-left whitespace-nowrap">序号</th>
-                        <th className="px-2 py-2 text-left whitespace-nowrap">方向</th>
-                        <th className="px-2 py-2 text-left whitespace-nowrap">仓位</th>
-                        <th className="px-2 py-2 text-left whitespace-nowrap">杠杆</th>
-                        <th className="px-2 py-2 text-left whitespace-nowrap">进场价</th>
-                        <th className="px-2 py-2 text-left whitespace-nowrap">出场价</th>
-                        <th className="px-2 py-2 text-left whitespace-nowrap">毛盈亏</th>
-                        <th className="px-2 py-2 text-left whitespace-nowrap">手续费</th>
-                        <th className="px-2 py-2 text-left whitespace-nowrap">净盈亏</th>
-                        <th className="px-2 py-2 text-left whitespace-nowrap">原因</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {result.trades.map((trade, index) => (
-                        <tr key={index} className="border-t border-gray-700 hover:bg-gray-700/50">
-                          <td className="px-2 py-2">{index + 1}</td>
-                          <td className="px-2 py-2">
-                            <span className={`px-2 py-1 rounded text-xs ${trade.direction === "long" ? "bg-green-600" : "bg-red-600"}`}>
-                              {trade.direction === "long" ? "做多" : "做空"}
-                            </span>
-                          </td>
-                          <td className="px-2 py-2">{formatNumber(trade.positionSize, 0)} USDT</td>
-                          <td className="px-2 py-2">{trade.leverage}x</td>
-                          <td className="px-2 py-2">{formatNumber(trade.entryPrice, 2)}</td>
-                          <td className="px-2 py-2">{formatNumber(trade.exitPrice, 2)}</td>
-                          <td className={`px-2 py-2 font-semibold ${trade.pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
-                            {formatNumber(trade.pnl, 2)}%
-                          </td>
-                          <td className="px-2 py-2 text-yellow-500">
-                            {formatNumber(trade.totalFee, 2)} USDT
-                          </td>
-                          <td className={`px-2 py-2 font-semibold ${trade.netPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
-                            {formatNumber(trade.netPnl, 2)} USDT
-                          </td>
-                          <td className="px-2 py-2">{trade.reason}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </>
-        )}
-        
-        {!result && klines15m.length === 0 && (
-          <div className="bg-gray-800 rounded-lg p-12 text-center">
-            <p className="text-gray-400 mb-4">开始使用回测工具</p>
-            <ol className="text-left text-gray-300 space-y-2 max-w-md mx-auto">
-              <li>1. 调整左侧策略参数（或使用默认值）</li>
-              <li>2. 点击"生成模拟数据"加载测试数据</li>
-              <li>3. 点击"运行回测"开始策略回测</li>
-              <li>4. 查看回测结果和交易明细</li>
-            </ol>
-          </div>
-        )}
-        
-        {!result && klines15m.length > 0 && !isLoading && (
-          <div className="bg-gray-800 rounded-lg p-12 text-center">
-            <p className="text-gray-400">数据已加载，点击"运行回测"开始分析</p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+  }
 }
