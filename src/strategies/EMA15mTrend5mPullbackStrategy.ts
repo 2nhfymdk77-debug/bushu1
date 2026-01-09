@@ -15,6 +15,10 @@ import {
 
 // 策略参数类型
 export interface EMATrendPullbackParams extends BaseStrategyParams {
+  // 时间周期参数
+  trendTimeframe: string;  // 趋势识别周期（如15m, 1h, 4h）
+  entryTimeframe: string;  // 进场信号周期（如5m, 15m）
+
   // EMA参数
   emaShort: number;
   emaLong: number;
@@ -29,13 +33,13 @@ export interface EMATrendPullbackParams extends BaseStrategyParams {
   // 趋势过滤参数
   minTrendDistance: number;  // 最小趋势距离（%）
 
-  // 5分钟进场筛选条件开关
+  // 进场筛选条件开关
   enablePriceEMAFilter: boolean;      // 价格与EMA关系
   enableRSIFilter: boolean;           // RSI超买超卖检测
   enableTouchedEmaFilter: boolean;   // EMA回踩/反弹检测
   enableCandleColorFilter: boolean;  // K线颜色确认
 
-  // 5分钟进场筛选条件参数
+  // 进场筛选条件参数
   emaTouchLookback: number;          // 回踩检测的K线数量
   minCandleChangePercent: number;   // 最小涨跌幅（%）
   minConditionsRequired: number;     // 进场需要满足的最少条件数
@@ -43,18 +47,20 @@ export interface EMATrendPullbackParams extends BaseStrategyParams {
 
 // 策略元信息
 const STRATEGY_META: StrategyMeta = {
-  id: "ema_15m_trend_5m_pullback",
-  name: "15分钟趋势+5分钟回调",
-  description: "多时间框架策略：使用15分钟EMA确认趋势方向，在5分钟图中寻找回调进场点。结合RSI、成交量、K线颜色等多重过滤条件。",
-  version: "1.0.0",
+  id: "ema_trend_recognition",
+  name: "EMA趋势识别",
+  description: "多时间框架策略：使用自定义周期EMA确认趋势方向，在小周期图中寻找回调进场点。结合RSI、成交量、K线颜色等多重过滤条件。",
+  version: "2.0.0",
   category: "趋势跟踪",
   author: "AutoTrader",
-  timeframe: ["15m", "5m"],
+  timeframe: ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d"],
   riskLevel: "medium"
 };
 
 // 默认参数
 const DEFAULT_PARAMS: EMATrendPullbackParams = {
+  trendTimeframe: "15m",
+  entryTimeframe: "5m",
   emaShort: 20,
   emaLong: 60,
   rsiPeriod: 14,
@@ -82,6 +88,52 @@ export class EMATrendPullbackStrategy implements TradingStrategy<EMATrendPullbac
 
   getConfigItems(): StrategyConfigItem[] {
     return [
+      // 时间周期参数
+      {
+        key: "trendTimeframe",
+        label: "趋势识别周期",
+        type: "select",
+        defaultValue: DEFAULT_PARAMS.trendTimeframe,
+        options: [
+          { value: "1m", label: "1分钟" },
+          { value: "3m", label: "3分钟" },
+          { value: "5m", label: "5分钟" },
+          { value: "15m", label: "15分钟" },
+          { value: "30m", label: "30分钟" },
+          { value: "1h", label: "1小时" },
+          { value: "2h", label: "2小时" },
+          { value: "4h", label: "4小时" },
+          { value: "6h", label: "6小时" },
+          { value: "8h", label: "8小时" },
+          { value: "12h", label: "12小时" },
+          { value: "1d", label: "1天" },
+        ],
+        description: "用于确认大趋势方向的时间周期",
+        category: "时间周期"
+      },
+      {
+        key: "entryTimeframe",
+        label: "进场信号周期",
+        type: "select",
+        defaultValue: DEFAULT_PARAMS.entryTimeframe,
+        options: [
+          { value: "1m", label: "1分钟" },
+          { value: "3m", label: "3分钟" },
+          { value: "5m", label: "5分钟" },
+          { value: "15m", label: "15分钟" },
+          { value: "30m", label: "30分钟" },
+          { value: "1h", label: "1小时" },
+          { value: "2h", label: "2小时" },
+          { value: "4h", label: "4小时" },
+          { value: "6h", label: "6小时" },
+          { value: "8h", label: "8小时" },
+          { value: "12h", label: "12小时" },
+          { value: "1d", label: "1天" },
+        ],
+        description: "用于寻找回调进场点的时间周期（应小于趋势识别周期）",
+        category: "时间周期"
+      },
+
       // 基本参数
       {
         key: "emaShort",

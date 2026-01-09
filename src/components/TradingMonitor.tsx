@@ -45,6 +45,8 @@ interface AccountInfo {
 }
 
 export interface TradingParams {
+  trendTimeframe: string;
+  entryTimeframe: string;
   emaShort: number;
   emaLong: number;
   rsiPeriod: number;
@@ -62,6 +64,8 @@ export interface TradingParams {
 }
 
 export const DEFAULT_TRADING_PARAMS: TradingParams = {
+  trendTimeframe: "15m",
+  entryTimeframe: "5m",
   emaShort: 20,
   emaLong: 60,
   rsiPeriod: 14,
@@ -80,11 +84,11 @@ export const DEFAULT_TRADING_PARAMS: TradingParams = {
 
 const STRATEGIES = [
   {
-    id: "ema_trend_pullback",
-    name: "15分钟趋势 + 5分钟回调策略",
-    description: "基于EMA趋势识别和5分钟回调信号的经典策略，适合趋势明显的市场。",
+    id: "ema_trend_recognition",
+    name: "EMA趋势识别",
+    description: "多时间框架策略：使用自定义周期EMA确认趋势方向，在小周期图中寻找回调进场点。结合RSI、成交量、K线颜色等多重过滤条件。",
     icon: "📈",
-    params: ["emaShort", "emaLong", "rsiPeriod", "volumePeriod", "stopLossPercent", "riskReward1", "riskReward2", "leverage", "minTrendDistance"]
+    params: ["trendTimeframe", "entryTimeframe", "emaShort", "emaLong", "rsiPeriod", "volumePeriod", "stopLossPercent", "riskReward1", "riskReward2", "leverage", "minTrendDistance"]
   },
   {
     id: "rsi_reversal",
@@ -549,6 +553,52 @@ export default function TradingMonitor({ isMobile = false }: TradingMonitorProps
               策略参数
             </h3>
             <div className="space-y-4">
+              {currentStrategy?.params.includes("trendTimeframe") && (
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">趋势识别周期</label>
+                  <select
+                    value={params.trendTimeframe}
+                    onChange={(e) => setParams({ ...params, trendTimeframe: e.target.value })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  >
+                    <option value="1m">1分钟</option>
+                    <option value="3m">3分钟</option>
+                    <option value="5m">5分钟</option>
+                    <option value="15m">15分钟</option>
+                    <option value="30m">30分钟</option>
+                    <option value="1h">1小时</option>
+                    <option value="2h">2小时</option>
+                    <option value="4h">4小时</option>
+                    <option value="6h">6小时</option>
+                    <option value="8h">8小时</option>
+                    <option value="12h">12小时</option>
+                    <option value="1d">1天</option>
+                  </select>
+                </div>
+              )}
+              {currentStrategy?.params.includes("entryTimeframe") && (
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">进场信号周期</label>
+                  <select
+                    value={params.entryTimeframe}
+                    onChange={(e) => setParams({ ...params, entryTimeframe: e.target.value })}
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  >
+                    <option value="1m">1分钟</option>
+                    <option value="3m">3分钟</option>
+                    <option value="5m">5分钟</option>
+                    <option value="15m">15分钟</option>
+                    <option value="30m">30分钟</option>
+                    <option value="1h">1小时</option>
+                    <option value="2h">2小时</option>
+                    <option value="4h">4小时</option>
+                    <option value="6h">6小时</option>
+                    <option value="8h">8小时</option>
+                    <option value="12h">12小时</option>
+                    <option value="1d">1天</option>
+                  </select>
+                </div>
+              )}
               {currentStrategy?.params.includes("emaShort") && (
                 <div>
                   <label className="block text-sm text-gray-400 mb-1">EMA短期周期</label>
