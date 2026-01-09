@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import CandlestickChart from "./CandlestickChart";
+import { EMATrendPullbackStrategy, EMATrendPullbackParams } from "../strategies/EMA15mTrend5mPullbackStrategy";
 
 // 类型定义
 interface KLine {
@@ -130,7 +131,13 @@ const STRATEGIES = [
 export default function CryptoBacktestTool() {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [selectedStrategy, setSelectedStrategy] = useState(STRATEGIES[0].id);
-  const [params, setParams] = useState<StrategyParams>(DEFAULT_PARAMS);
+  const strategy = new EMATrendPullbackStrategy();
+  const strategyDefaultParams = strategy.getDefaultParams();
+
+  const [params, setParams] = useState<StrategyParams>({
+    ...DEFAULT_PARAMS,
+    ...strategyDefaultParams,
+  });
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [klines15m, setKlines15m] = useState<KLine[]>([]);
   const [klines5m, setKlines5m] = useState<KLine[]>([]);
