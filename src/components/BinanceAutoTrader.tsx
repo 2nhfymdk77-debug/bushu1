@@ -369,13 +369,15 @@ export default function BinanceAutoTrader() {
         }
 
         // 检查该合约的时间间隔（避免同一合约频繁交易）
-        const now = Date.now();
-        const lastTime = lastSignalTimes.get(symbol) || 0;
-        if (now - lastTime < 300000) { // 5分钟
-          addLog(`⚠️ 合约 ${symbol} 距离上次交易不足5分钟，跳过`);
-          skippedCount++;
-          continue;
-        }
+        // 移除这个检查，改为在信号检测时按direction去重
+        // 因为同一合约可能同时有多头和空头信号
+        // const now = Date.now();
+        // const lastTime = lastSignalTimes.get(symbol) || 0;
+        // if (now - lastTime < 300000) { // 5分钟
+        //   addLog(`⚠️ 合约 ${symbol} 距离上次交易不足5分钟，跳过`);
+        //   skippedCount++;
+        //   continue;
+        // }
 
         // 检查是否达到每日交易次数限制
         if (dailyTradesCount >= tradingConfig.dailyTradesLimit) {
@@ -438,58 +440,84 @@ export default function BinanceAutoTrader() {
                 addDetailLog(`${symbol} 信号原因: ${signal.reason}`, 'info');
                 addDetailLog(`${symbol} 详细信息: ${details}`, 'info');
 
-                // 检查是否可以执行交易
-                let canExecute = autoTrading;
-                let notExecutedReason = "";
+                // 立即标记该信号已被处理，防止重复交易
+                // 使用 symbol_direction 作为唯一键
+                const signalKey = `${signal.symbol}_${signal.direction}`;
+                const now = Date.now();
+                const lastSignalTime = lastSignalTimes.get(signalKey) || 0;
 
-                if (!autoTrading) {
-                  notExecutedReason = "自动交易未开启";
-                  canExecute = false;
-                } else if (positions.length >= tradingConfig.maxOpenPositions) {
-                  notExecutedReason = `已达到最大持仓限制 (${tradingConfig.maxOpenPositions})`;
-                  canExecute = false;
-                } else if (dailyTradesCount >= tradingConfig.dailyTradesLimit) {
-                  notExecutedReason = `已达到每日交易限制 (${tradingConfig.dailyTradesLimit})`;
-                  canExecute = false;
+                // 如果5分钟内已有相同方向的信号，跳过
+                if (now - lastSignalTime < 300000) {
+                  addDetailLog(`${symbol} 跳过重复信号: 5分钟内已有${signal.direction}信号`, 'warning');
                 } else {
-                  // 检查该合约是否已有持仓
-                  const existingPosition = positions.find(p => p.symbol === symbol && p.positionAmt !== 0);
-                  if (existingPosition) {
-                    notExecutedReason = `该合约已有持仓 (${existingPosition.positionSide}, 数量: ${existingPosition.positionAmt})`;
+                  // 立即更新lastSignalTimes，防止重复
+                  setLastSignalTimes((prev) => new Map(prev).set(signalKey, now));
+                  addDetailLog(`${symbol} 信号已标记，防止重复交易`, 'info');
+
+                  // 检查是否可以执行交易
+                  let canExecute = autoTrading;
+                  let notExecutedReason = "";
+
+                  if (!autoTrading) {
+                    notExecutedReason = "自动交易未开启";
                     canExecute = false;
+                  } else if (positions.length >= tradingConfig.maxOpenPositions) {
+                    notExecutedReason = `已达到最大持仓限制 (${tradingConfig.maxOpenPositions})`;
+                    canExecute = false;
+                  } else if (dailyTradesCount >= tradingConfig.dailyTradesLimit) {
+                    notExecutedReason = `已达到每日交易限制 (${tradingConfig.dailyTradesLimit})`;
+                    canExecute = false;
+                  } else {
+                    // 检查该合约是否已有相同方向的持仓
+                    const targetPositionSide = signal.direction === 'long' ? 'LONG' : 'SHORT';
+                    const existingPosition = positions.find(
+                      p => p.symbol === symbol &&
+                           p.positionSide === targetPositionSide &&
+                           p.positionAmt !== 0
+                    );
+                    if (existingPosition) {
+                      notExecutedReason = `该合约已有${targetPositionSide}持仓 (数量: ${existingPosition.positionAmt})`;
+                      canExecute = false;
+                    }
                   }
-                }
 
-                // 添加到信号列表
-                setSignals((prev) => {
-                  const exists = prev.some(s =>
-                    s.symbol === signal.symbol &&
-                    s.direction === signal.direction &&
-                    Date.now() - s.time < 300000
-                  );
-                  if (!exists) {
-                    return [{
-                      ...signal,
-                      executed: canExecute,
-                      notExecutedReason: canExecute ? undefined : notExecutedReason
-                    }, ...prev.slice(0, 49)];
-                  }
-                  return prev;
-                });
+                  // 添加到信号列表
+                  setSignals((prev) => {
+                    const exists = prev.some(s =>
+                      s.symbol === signal.symbol &&
+                      s.direction === signal.direction &&
+                      Date.now() - s.time < 300000
+                    );
+                    if (!exists) {
+                      return [{
+                        ...signal,
+                        executed: canExecute,
+                        notExecutedReason: canExecute ? undefined : notExecutedReason
+                      }, ...prev.slice(0, 49)];
+                    }
+                    return prev;
+                  });
 
-                // 执行交易（仅在未达到限制时）- 独立 try-catch
-                if (canExecute) {
-                  addDetailLog(`${symbol} 准备执行交易...`, 'info');
-                  try {
-                    await executeTrade(signal);
-                    tradesExecuted++;
-                    addDetailLog(`${symbol} 交易执行完成`, 'success');
-                  } catch (err: any) {
-                    addDetailLog(`${symbol} 交易执行失败: ${err.message}`, 'error');
-                    console.error(`交易执行失败 (${symbol}):`, err);
+                  // 执行交易（仅在未达到限制时）- 独立 try-catch
+                  if (canExecute) {
+                    addDetailLog(`${symbol} 准备执行交易...`, 'info');
+                    try {
+                      await executeTrade(signal);
+                      tradesExecuted++;
+                      addDetailLog(`${symbol} 交易执行完成`, 'success');
+                    } catch (err: any) {
+                      addDetailLog(`${symbol} 交易执行失败: ${err.message}`, 'error');
+                      console.error(`交易执行失败 (${symbol}):`, err);
+                      // 交易失败时，移除信号标记，允许重试
+                      setLastSignalTimes((prev) => {
+                        const newMap = new Map(prev);
+                        newMap.delete(signalKey);
+                        return newMap;
+                      });
+                    }
+                  } else {
+                    addDetailLog(`${symbol} 跳过交易: ${notExecutedReason}`, 'warning');
                   }
-                } else {
-                  addDetailLog(`${symbol} 跳过交易: ${notExecutedReason}`, 'warning');
                 }
               } else {
                 // 显示更详细的未触发原因
@@ -1821,14 +1849,27 @@ export default function BinanceAutoTrader() {
 
     // 检查该合约的时间间隔（避免同一合约频繁交易）
     const now = Date.now();
-    const lastTime = lastSignalTimes.get(signal.symbol) || 0;
+    const signalKey = `${signal.symbol}_${signal.direction}`;
+    const lastTime = lastSignalTimes.get(signalKey) || 0;
     if (now - lastTime < 300000) { // 5分钟
-      addSystemLog(`合约 ${signal.symbol} 距离上次交易不足5分钟，跳过`, 'warning');
+      addSystemLog(`合约 ${signal.symbol} ${signal.direction} 距离上次交易不足5分钟，跳过`, 'warning');
       return;
     }
 
-    // 立即更新 lastSignalTimes，防止同一信号重复执行
-    setLastSignalTimes((prev) => new Map(prev).set(signal.symbol, now));
+    // 立即更新 lastSignalTimes，防止同一信号重复执行（双重保护）
+    setLastSignalTimes((prev) => new Map(prev).set(signalKey, now));
+
+    // 双重检查：确保没有相同方向的持仓
+    const targetPositionSide = signal.direction === 'long' ? 'LONG' : 'SHORT';
+    const existingPosition = positions.find(
+      p => p.symbol === signal.symbol &&
+           p.positionSide === targetPositionSide &&
+           p.positionAmt !== 0
+    );
+    if (existingPosition) {
+      addSystemLog(`交易取消: ${signal.symbol} 已有${targetPositionSide}持仓 (数量: ${existingPosition.positionAmt})`, 'warning');
+      return;
+    }
 
     try {
       const side = signal.direction === "long" ? "BUY" : "SELL";
