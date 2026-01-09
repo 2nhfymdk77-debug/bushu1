@@ -226,6 +226,7 @@ export default function BinanceAutoTrader() {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [tradeRecords, setTradeRecords] = useState<TradeRecord[]>([]);
   const [completedTrades, setCompletedTrades] = useState<CompletedTrade[]>([]); // 完整的交易记录（开仓+平仓）
+  const [processedClosedPositions, setProcessedClosedPositions] = useState<Set<string>>(new Set()); // 已处理的平仓持仓
   const [strategyParams, setStrategyParams] = useState<StrategyParams>(DEFAULT_PARAMS);
   const [tradingConfig, setTradingConfig] = useState<TradingConfig>(DEFAULT_TRADING_CONFIG);
   const [klineData, setKlineData] = useState<Map<string, KLineData[]>>(new Map());
@@ -1148,6 +1149,9 @@ export default function BinanceAutoTrader() {
       if (positionsResponse.ok) {
         const positionsData = await positionsResponse.json();
 
+        // 保存旧的持仓，用于检测被平掉的持仓
+        const oldPositions = positions;
+
         // 保留现有的 takeProfitExecuted 和 openTime 状态
         const existingTpExecuted = new Map<string, { r1: boolean; r2: boolean; r3: boolean }>();
         const existingOpenTimes = new Map<string, number>(); // 保存现有持仓的开仓时间
@@ -1183,6 +1187,69 @@ export default function BinanceAutoTrader() {
         setPositions(initializedPositions);
         console.log('[fetchAccountInfo] Positions fetched:', initializedPositions.length,
           'Existing TP states:', Array.from(existingTpExecuted.entries()).map(([k, v]) => `${k}: r1=${v.r1}, r2=${v.r2}, r3=${v.r3}`));
+
+        // 检测被平掉的持仓（止盈止损订单成交等情况）
+        if (oldPositions.length > 0) {
+          oldPositions.forEach(oldPos => {
+            if (Math.abs(oldPos.positionAmt) > 0) { // 旧持仓有数量
+              // 检查新持仓中是否还存在该持仓
+              const newPos = initializedPositions.find(
+                (p: Position) => p.symbol === oldPos.symbol && p.positionSide === oldPos.positionSide
+              );
+
+              // 如果不存在或者数量为0，说明被平仓了
+              if (!newPos || Math.abs(newPos.positionAmt) === 0) {
+                // 检查是否已经处理过这个平仓
+                const closeKey = `${oldPos.symbol}_${oldPos.positionSide}_${oldPos.positionAmt}`;
+                if (processedClosedPositions.has(closeKey)) {
+                  console.log(`跳过重复的平仓记录: ${closeKey}`);
+                  return;
+                }
+
+                const closeReason = oldPos.unRealizedProfit > 0
+                  ? '止盈订单成交'
+                  : oldPos.unRealizedProfit < 0
+                  ? '止损订单成交'
+                  : '手动平仓';
+
+                // 创建CompletedTrade记录
+                const completedTrade: CompletedTrade = {
+                  id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                  symbol: oldPos.symbol,
+                  positionSide: oldPos.positionSide,
+                  openTime: oldPos.openTime || Date.now() - 3600000,
+                  closeTime: Date.now(),
+                  entryPrice: oldPos.entryPrice,
+                  exitPrice: oldPos.markPrice,
+                  quantity: Math.abs(oldPos.positionAmt),
+                  leverage: oldPos.leverage,
+                  pnl: oldPos.unRealizedProfit,
+                  pnlPercent: oldPos.unRealizedProfit / Math.abs(oldPos.notional) * 100,
+                  closeReason: closeReason,
+                  direction: oldPos.positionSide === 'LONG' ? 'long' : 'short',
+                  notional: oldPos.notional,
+                };
+
+                setCompletedTrades((prev) => [completedTrade, ...prev.slice(0, 199)]);
+                console.log(`检测到持仓平仓: ${oldPos.symbol} 原因: ${closeReason} 盈亏: ${oldPos.unRealizedProfit.toFixed(2)} USDT`);
+                addSystemLog(`检测到持仓平仓: ${oldPos.symbol} 原因: ${closeReason} 盈亏: ${oldPos.unRealizedProfit.toFixed(2)} USDT`, 'success');
+
+                // 标记为已处理
+                setProcessedClosedPositions(prev => {
+                  const newSet = new Set(prev);
+                  newSet.add(closeKey);
+                  // 保持集合大小不超过100
+                  if (newSet.size > 100) {
+                    const arr = Array.from(newSet);
+                    arr.shift();
+                    return new Set(arr);
+                  }
+                  return newSet;
+                });
+              }
+            }
+          });
+        }
 
         // 检查持仓并自动平仓（仅当 shouldCheckPositions 为 true 时）
         if (shouldCheckPositions) {
@@ -1735,6 +1802,9 @@ export default function BinanceAutoTrader() {
       return;
     }
 
+    // 立即更新 lastSignalTimes，防止同一信号重复执行
+    setLastSignalTimes((prev) => new Map(prev).set(signal.symbol, now));
+
     try {
       const side = signal.direction === "long" ? "BUY" : "SELL";
       const type = "MARKET";
@@ -1849,7 +1919,6 @@ export default function BinanceAutoTrader() {
       };
 
       setTradeRecords((prev) => [trade, ...prev.slice(0, 99)]);
-      setLastSignalTimes((prev) => new Map(prev).set(signal.symbol, now));
       setDailyTradesCount((prev) => prev + 1);
       addSystemLog(`交易成功: ${signal.symbol} ${side} ${formattedQuantity.toFixed(4)} @ ${signal.entryPrice}`, 'success');
 
