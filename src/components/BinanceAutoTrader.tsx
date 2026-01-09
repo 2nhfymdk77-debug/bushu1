@@ -574,6 +574,11 @@ export default function BinanceAutoTrader() {
   const checkPositionsAndAutoClose = async () => {
     if (!autoTrading || !connected || positions.length === 0) return;
 
+    // 如果使用止盈止损订单模式，则不执行自动平仓逻辑（止盈止损单已挂在币安服务器）
+    if (tradingConfig.useStopTakeProfitOrders) {
+      return;
+    }
+
     for (const position of positions) {
       if (position.positionAmt === 0) continue;
 
@@ -582,6 +587,10 @@ export default function BinanceAutoTrader() {
       const currentPrice = position.markPrice;
       const entryPrice = position.entryPrice;
       const pnl = position.unRealizedProfit;
+
+      // 获取交易对精度信息
+      const symbolInfo = symbols.find(s => s.symbol === symbol);
+      const pricePrecision = symbolInfo?.pricePrecision || 2;
 
       // 计算风险值R（止损距离）
       const riskDistance = entryPrice * (tradingConfig.stopLossPercent / 100);
@@ -674,16 +683,9 @@ export default function BinanceAutoTrader() {
           ? currentPrice >= triggerPrice
           : currentPrice <= triggerPrice;
 
-        // 如果达到1R且要求移动到保本价
-        if (hitTrigger && tradingConfig.trailingStopMoveToBreakeven && !position.stopLossBreakeven) {
-          console.log(`触发移动止损到保本价: ${symbol}`);
-          // 移动止损到保本价（入场价）
-          // 这里只是逻辑，实际需要通过API修改止损订单
-          // 目前我们只能在价格跌破保本价时平仓
-        }
-
         // 计算移动止损价格
         let trailingStopPrice = stopLossPrice;
+        let newStopLossBreakeven = position.stopLossBreakeven || false;
 
         if (hitTrigger) {
           if (isLong) {
@@ -700,10 +702,31 @@ export default function BinanceAutoTrader() {
           if (tradingConfig.trailingStopMoveToBreakeven) {
             if (isLong && trailingStopPrice < entryPrice) {
               trailingStopPrice = entryPrice;
+              newStopLossBreakeven = true;
             } else if (!isLong && trailingStopPrice > entryPrice) {
               trailingStopPrice = entryPrice;
+              newStopLossBreakeven = true;
             }
           }
+
+          // 更新position状态中的最高价/最低价和移动止损价格
+          setPositions(prevPositions =>
+            prevPositions.map(p => {
+              if (p.symbol === symbol && p.positionSide === position.positionSide) {
+                return {
+                  ...p,
+                  highestPrice: newHighestPrice,
+                  lowestPrice: newLowestPrice,
+                  trailingStopPrice,
+                  stopLossBreakeven: newStopLossBreakeven
+                };
+              }
+              return p;
+            })
+          );
+
+          // 记录日志
+          addSystemLog(`[${symbol}] 移动止损更新: 触发价=${triggerPrice.toFixed(pricePrecision)}, 移动止损价=${trailingStopPrice.toFixed(pricePrecision)}, 保本=${newStopLossBreakeven ? '是' : '否'}`, 'info');
         }
 
         // 检查是否触发移动止损
@@ -713,6 +736,7 @@ export default function BinanceAutoTrader() {
 
         if (hitTrailingStop) {
           console.log(`触发移动止损: ${symbol} 价格: ${currentPrice.toFixed(2)} 移动止损价: ${trailingStopPrice.toFixed(2)}`);
+          addSystemLog(`触发移动止损: ${symbol} 价格: ${currentPrice.toFixed(2)} 移动止损价: ${trailingStopPrice.toFixed(2)}`, 'success');
           await executeAutoClose(position, "移动止损触发");
           continue;
         }
@@ -1307,7 +1331,7 @@ export default function BinanceAutoTrader() {
 
   // 持仓监控定时任务（自动检查持仓并执行止盈止损）
   useEffect(() => {
-    if (isTrading && connected && autoTrading && positions.length > 0) {
+    if (connected && autoTrading && positions.length > 0) {
       // 每2秒检查一次持仓状态
       const checkInterval = setInterval(() => {
         checkPositionsAndAutoClose();
@@ -1317,7 +1341,7 @@ export default function BinanceAutoTrader() {
         clearInterval(checkInterval);
       };
     }
-  }, [isTrading, connected, autoTrading, positions]);
+  }, [connected, autoTrading, positions]);
 
   // 计算EMA
   const calculateEMA = (data: KLineData[], period: number): number[] => {
