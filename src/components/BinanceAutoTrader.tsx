@@ -17,12 +17,7 @@ interface StrategyParams {
   emaLong: number;
   rsiPeriod: number;
   volumePeriod: number;
-  stopLossPercent: number;
-  riskRewardMultiplier1: number; // 1R盈亏比倍数（默认1.5）
-  riskRewardMultiplier2: number; // 2R盈亏比倍数（默认2.5）
-  riskRewardMultiplier3: number; // 3R盈亏比倍数（默认4.0）
   leverage: number;
-  riskPercent: number;
   minTrendDistance: number;
   contractPoolSize: number; // 合约池数量
   // 筛选条件开关和阈值
@@ -44,12 +39,7 @@ const DEFAULT_PARAMS: StrategyParams = {
   emaLong: 60,
   rsiPeriod: 14,
   volumePeriod: 20,
-  stopLossPercent: 0.4,
-  riskRewardMultiplier1: 1.5, // 1R = 1.5倍止损距离
-  riskRewardMultiplier2: 2.5, // 2R = 2.5倍止损距离
-  riskRewardMultiplier3: 4.0, // 3R = 4.0倍止损距离
   leverage: 3,
-  riskPercent: 2,
   minTrendDistance: 0.05, // 降低最小趋势距离（0.15% -> 0.05%）
   contractPoolSize: 500, // 合约池数量（默认500个）
   // 筛选条件开关和阈值（默认全部开启）
@@ -189,7 +179,6 @@ export default function BinanceAutoTrader() {
   const [processedClosedPositions, setProcessedClosedPositions] = useState<Set<string>>(new Set()); // 已处理的平仓持仓
   const [strategyParams, setStrategyParams] = useState<StrategyParams>(DEFAULT_PARAMS);
   const [tradingConfig, setTradingConfig] = useState<TradingConfig>(DEFAULT_TRADING_CONFIG);
-  const [klineData, setKlineData] = useState<Map<string, KLineData[]>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [lastSignalTimes, setLastSignalTimes] = useState<Map<string, number>>(new Map()); // 按合约记录最后交易时间
@@ -204,7 +193,6 @@ export default function BinanceAutoTrader() {
 
   const wsRef = useRef<WebSocket | null>(null);
   const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const emaCacheRef = useRef<Map<string, { short: number[]; long: number[]; volMA: number[] }>>(new Map());
   const currentBatchRef = useRef(0); // 当前扫描批次索引（使用ref避免闭包问题）
 
   // 统一的日志记录函数
@@ -2274,59 +2262,6 @@ export default function BinanceAutoTrader() {
                     value={strategyParams.volumePeriod}
                     onChange={(e) =>
                       setStrategyParams({ ...strategyParams, volumePeriod: Number(e.target.value) })
-                    }
-                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                  />
-                </div>
-
-                {/* 1R、2R、3R盈亏比倍数 */}
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">
-                    1R盈亏比倍数
-                    <span className="text-xs text-gray-500 ml-2">= 止损距离 × {strategyParams.riskRewardMultiplier1}</span>
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0.5"
-                    max="10"
-                    value={strategyParams.riskRewardMultiplier1}
-                    onChange={(e) =>
-                      setStrategyParams({ ...strategyParams, riskRewardMultiplier1: Math.min(10, Math.max(0.5, Number(e.target.value))) })
-                    }
-                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">
-                    2R盈亏比倍数
-                    <span className="text-xs text-gray-500 ml-2">= 止损距离 × {strategyParams.riskRewardMultiplier2}</span>
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0.5"
-                    max="10"
-                    value={strategyParams.riskRewardMultiplier2}
-                    onChange={(e) =>
-                      setStrategyParams({ ...strategyParams, riskRewardMultiplier2: Math.min(10, Math.max(0.5, Number(e.target.value))) })
-                    }
-                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">
-                    3R盈亏比倍数
-                    <span className="text-xs text-gray-500 ml-2">= 止损距离 × {strategyParams.riskRewardMultiplier3}</span>
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0.5"
-                    max="10"
-                    value={strategyParams.riskRewardMultiplier3}
-                    onChange={(e) =>
-                      setStrategyParams({ ...strategyParams, riskRewardMultiplier3: Math.min(10, Math.max(0.5, Number(e.target.value))) })
                     }
                     className="w-full bg-gray-700 rounded px-3 py-2 text-white"
                   />
