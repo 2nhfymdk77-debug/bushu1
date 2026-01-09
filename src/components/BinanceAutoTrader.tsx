@@ -18,8 +18,9 @@ interface StrategyParams {
   rsiPeriod: number;
   volumePeriod: number;
   stopLossPercent: number;
-  riskReward1: number;
-  riskReward2: number;
+  riskRewardMultiplier1: number; // 1R盈亏比倍数（默认1.5）
+  riskRewardMultiplier2: number; // 2R盈亏比倍数（默认2.5）
+  riskRewardMultiplier3: number; // 3R盈亏比倍数（默认4.0）
   leverage: number;
   riskPercent: number;
   minTrendDistance: number;
@@ -44,8 +45,9 @@ const DEFAULT_PARAMS: StrategyParams = {
   rsiPeriod: 14,
   volumePeriod: 20,
   stopLossPercent: 0.4,
-  riskReward1: 1.5,
-  riskReward2: 2.5,
+  riskRewardMultiplier1: 1.5, // 1R = 1.5倍止损距离
+  riskRewardMultiplier2: 2.5, // 2R = 2.5倍止损距离
+  riskRewardMultiplier3: 4.0, // 3R = 4.0倍止损距离
   leverage: 3,
   riskPercent: 2,
   minTrendDistance: 0.05, // 降低最小趋势距离（0.15% -> 0.05%）
@@ -658,10 +660,10 @@ export default function BinanceAutoTrader() {
       const riskDistance = entryPrice * (tradingConfig.stopLossPercent / 100);
       const rPrice = riskDistance; // 1R的价格距离
 
-      // 计算1R、2R、3R价格
-      const r1Price = isLong ? entryPrice + rPrice : entryPrice - rPrice;
-      const r2Price = isLong ? entryPrice + rPrice * 2 : entryPrice - rPrice * 2;
-      const r3Price = isLong ? entryPrice + rPrice * 3 : entryPrice - rPrice * 3;
+      // 计算1R、2R、3R价格（使用自定义盈亏比倍数）
+      const r1Price = isLong ? entryPrice + rPrice * strategyParams.riskRewardMultiplier1 : entryPrice - rPrice * strategyParams.riskRewardMultiplier1;
+      const r2Price = isLong ? entryPrice + rPrice * strategyParams.riskRewardMultiplier2 : entryPrice - rPrice * strategyParams.riskRewardMultiplier2;
+      const r3Price = isLong ? entryPrice + rPrice * strategyParams.riskRewardMultiplier3 : entryPrice - rPrice * strategyParams.riskRewardMultiplier3;
 
       // 基础止损价格
       const stopLossPrice = isLong
@@ -692,24 +694,24 @@ export default function BinanceAutoTrader() {
       if (tradingConfig.usePartialTakeProfit) {
         const tpExecuted = position.takeProfitExecuted || { r1: false, r2: false, r3: false };
 
-        // 2.1 检查1R止盈（50%）
+        // 2.1 检查1R止盈
         if (!tpExecuted.r1) {
           const hitR1 = isLong ? currentPrice >= r1Price : currentPrice <= r1Price;
           if (hitR1) {
             console.log(`[分段止盈] 达到1R止盈位: ${symbol} 价格: ${currentPrice.toFixed(2)} 1R价: ${r1Price.toFixed(2)} 当前持仓: ${position.positionAmt}`);
-            // 平仓50%
-            await executePartialClose(position, 0.5, "1R止盈50%");
+            // 平仓指定比例
+            await executePartialClose(position, tradingConfig.partialTakeProfitR1 / 100, "1R止盈");
             continue; // 执行后继续下一个持仓
           }
         }
 
-        // 2.2 检查2R-3R止盈（剩余50%）
+        // 2.2 检查2R止盈
         if (tpExecuted.r1 && !tpExecuted.r2) {
           const hitR2 = isLong ? currentPrice >= r2Price : currentPrice <= r2Price;
           if (hitR2) {
             console.log(`[分段止盈] 达到2R止盈位: ${symbol} 价格: ${currentPrice.toFixed(2)} 2R价: ${r2Price.toFixed(2)} 当前持仓: ${position.positionAmt} 止盈状态: r1=${tpExecuted.r1}`);
-            // 平仓剩余100%（因为之前已经平了50%，现在平剩下的全部）
-            await executePartialClose(position, 1.0, "2R全部止盈");
+            // 平仓指定比例
+            await executePartialClose(position, tradingConfig.partialTakeProfitR2 / 100, "2R止盈");
             continue;
           }
         }
@@ -719,8 +721,8 @@ export default function BinanceAutoTrader() {
           const hitR3 = isLong ? currentPrice >= r3Price : currentPrice <= r3Price;
           if (hitR3) {
             console.log(`[分段止盈] 达到3R止盈位: ${symbol} 价格: ${currentPrice.toFixed(2)} 3R价: ${r3Price.toFixed(2)} 当前持仓: ${position.positionAmt}`);
-            // 平仓剩余所有
-            await executePartialClose(position, 1.0, "3R全部止盈");
+            // 平仓所有剩余仓位
+            await executePartialClose(position, 1.0, "3R止盈");
             continue;
           }
         }
@@ -2357,13 +2359,73 @@ export default function BinanceAutoTrader() {
                       <span className="text-lg">🎯</span>
                       <span className="font-semibold text-blue-400">分段止盈+移动止损模式（高级）</span>
                     </div>
-                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside">
-                      <li><strong>分段止盈</strong>：1R平50%，2R-3R全平</li>
+                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside mb-4">
+                      <li><strong>分段止盈</strong>：可自定义1R、2R、3R倍数和止盈比例</li>
                       <li><strong>移动止损</strong>：达到1R后止损移到保本价</li>
                       <li>客户端每2秒监控持仓状态</li>
                       <li>需要保持网络连接和页面打开</li>
                       <li>适合有经验的交易者，优化盈亏比</li>
                     </ul>
+                    {/* 分段止盈配置 */}
+                    <div className="mt-4 p-4 bg-gray-800 rounded-lg">
+                      <div className="text-xs font-semibold text-gray-400 mb-3">分段止盈配置</div>
+                      <div className="grid grid-cols-3 gap-4">
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">
+                            1R止盈比例
+                            <span className="text-xs text-gray-500 ml-1">(%)</span>
+                          </label>
+                          <input
+                            type="number"
+                            step="10"
+                            min="0"
+                            max="100"
+                            value={tradingConfig.partialTakeProfitR1}
+                            onChange={(e) =>
+                              setTradingConfig({ ...tradingConfig, partialTakeProfitR1: Math.min(100, Math.max(0, Number(e.target.value))) })
+                            }
+                            className="w-full bg-gray-700 rounded px-2 py-1 text-white text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">
+                            2R止盈比例
+                            <span className="text-xs text-gray-500 ml-1">(%)</span>
+                          </label>
+                          <input
+                            type="number"
+                            step="10"
+                            min="0"
+                            max="100"
+                            value={tradingConfig.partialTakeProfitR2}
+                            onChange={(e) =>
+                              setTradingConfig({ ...tradingConfig, partialTakeProfitR2: Math.min(100, Math.max(0, Number(e.target.value))) })
+                            }
+                            className="w-full bg-gray-700 rounded px-2 py-1 text-white text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">
+                            3R止盈比例
+                            <span className="text-xs text-gray-500 ml-1">(%)</span>
+                          </label>
+                          <input
+                            type="number"
+                            step="10"
+                            min="0"
+                            max="100"
+                            value={tradingConfig.partialTakeProfitR3}
+                            onChange={(e) =>
+                              setTradingConfig({ ...tradingConfig, partialTakeProfitR3: Math.min(100, Math.max(0, Number(e.target.value))) })
+                            }
+                            className="w-full bg-gray-700 rounded px-2 py-1 text-white text-sm"
+                          />
+                        </div>
+                      </div>
+                      <div className="text-xs text-gray-500 mt-2">
+                        说明：1R价格=止损距离×{strategyParams.riskRewardMultiplier1}倍，2R=×{strategyParams.riskRewardMultiplier2}倍，3R=×{strategyParams.riskRewardMultiplier3}倍
+                      </div>
+                    </div>
                   </div>
                 )}
                 {closeMode === 'simple' && (
@@ -2471,9 +2533,9 @@ export default function BinanceAutoTrader() {
                 {positions.map((pos, index) => {
                   const isLong = pos.positionAmt > 0;
                   const riskDistance = pos.entryPrice * (tradingConfig.stopLossPercent / 100);
-                  const r1Price = isLong ? pos.entryPrice + riskDistance : pos.entryPrice - riskDistance;
-                  const r2Price = isLong ? pos.entryPrice + riskDistance * 2 : pos.entryPrice - riskDistance * 2;
-                  const r3Price = isLong ? pos.entryPrice + riskDistance * 3 : pos.entryPrice - riskDistance * 3;
+                  const r1Price = isLong ? pos.entryPrice + riskDistance * strategyParams.riskRewardMultiplier1 : pos.entryPrice - riskDistance * strategyParams.riskRewardMultiplier1;
+                  const r2Price = isLong ? pos.entryPrice + riskDistance * strategyParams.riskRewardMultiplier2 : pos.entryPrice - riskDistance * strategyParams.riskRewardMultiplier2;
+                  const r3Price = isLong ? pos.entryPrice + riskDistance * strategyParams.riskRewardMultiplier3 : pos.entryPrice - riskDistance * strategyParams.riskRewardMultiplier3;
 
                   const stopLossPrice = isLong
                     ? pos.entryPrice * (1 - tradingConfig.stopLossPercent / 100)
@@ -2780,6 +2842,7 @@ export default function BinanceAutoTrader() {
 
             {showAdvancedParams && (
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4 p-4 bg-gray-700/30 rounded-lg">
+                {/* RSI和成交量参数 */}
                 <div>
                   <label className="block text-sm text-gray-400 mb-1">RSI周期</label>
                   <input
@@ -2798,6 +2861,59 @@ export default function BinanceAutoTrader() {
                     value={strategyParams.volumePeriod}
                     onChange={(e) =>
                       setStrategyParams({ ...strategyParams, volumePeriod: Number(e.target.value) })
+                    }
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+
+                {/* 1R、2R、3R盈亏比倍数 */}
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">
+                    1R盈亏比倍数
+                    <span className="text-xs text-gray-500 ml-2">= 止损距离 × {strategyParams.riskRewardMultiplier1}</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.5"
+                    max="10"
+                    value={strategyParams.riskRewardMultiplier1}
+                    onChange={(e) =>
+                      setStrategyParams({ ...strategyParams, riskRewardMultiplier1: Math.min(10, Math.max(0.5, Number(e.target.value))) })
+                    }
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">
+                    2R盈亏比倍数
+                    <span className="text-xs text-gray-500 ml-2">= 止损距离 × {strategyParams.riskRewardMultiplier2}</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.5"
+                    max="10"
+                    value={strategyParams.riskRewardMultiplier2}
+                    onChange={(e) =>
+                      setStrategyParams({ ...strategyParams, riskRewardMultiplier2: Math.min(10, Math.max(0.5, Number(e.target.value))) })
+                    }
+                    className="w-full bg-gray-700 rounded px-3 py-2 text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">
+                    3R盈亏比倍数
+                    <span className="text-xs text-gray-500 ml-2">= 止损距离 × {strategyParams.riskRewardMultiplier3}</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.5"
+                    max="10"
+                    value={strategyParams.riskRewardMultiplier3}
+                    onChange={(e) =>
+                      setStrategyParams({ ...strategyParams, riskRewardMultiplier3: Math.min(10, Math.max(0.5, Number(e.target.value))) })
                     }
                     className="w-full bg-gray-700 rounded px-3 py-2 text-white"
                   />
@@ -3085,13 +3201,73 @@ export default function BinanceAutoTrader() {
                       <span className="text-lg">🎯</span>
                       <span className="font-semibold text-blue-400">分段止盈+移动止损模式（高级）</span>
                     </div>
-                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside">
-                      <li><strong>分段止盈</strong>：1R平50%，2R-3R全平</li>
+                    <ul className="text-sm text-gray-300 space-y-1 list-disc list-inside mb-4">
+                      <li><strong>分段止盈</strong>：可自定义1R、2R、3R倍数和止盈比例</li>
                       <li><strong>移动止损</strong>：达到1R后止损移到保本价</li>
                       <li>客户端每2秒监控持仓状态</li>
                       <li>需要保持网络连接和页面打开</li>
                       <li>适合有经验的交易者，优化盈亏比</li>
                     </ul>
+                    {/* 分段止盈配置 */}
+                    <div className="mt-4 p-4 bg-gray-800 rounded-lg">
+                      <div className="text-xs font-semibold text-gray-400 mb-3">分段止盈配置</div>
+                      <div className="grid grid-cols-3 gap-4">
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">
+                            1R止盈比例
+                            <span className="text-xs text-gray-500 ml-1">(%)</span>
+                          </label>
+                          <input
+                            type="number"
+                            step="10"
+                            min="0"
+                            max="100"
+                            value={tradingConfig.partialTakeProfitR1}
+                            onChange={(e) =>
+                              setTradingConfig({ ...tradingConfig, partialTakeProfitR1: Math.min(100, Math.max(0, Number(e.target.value))) })
+                            }
+                            className="w-full bg-gray-700 rounded px-2 py-1 text-white text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">
+                            2R止盈比例
+                            <span className="text-xs text-gray-500 ml-1">(%)</span>
+                          </label>
+                          <input
+                            type="number"
+                            step="10"
+                            min="0"
+                            max="100"
+                            value={tradingConfig.partialTakeProfitR2}
+                            onChange={(e) =>
+                              setTradingConfig({ ...tradingConfig, partialTakeProfitR2: Math.min(100, Math.max(0, Number(e.target.value))) })
+                            }
+                            className="w-full bg-gray-700 rounded px-2 py-1 text-white text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">
+                            3R止盈比例
+                            <span className="text-xs text-gray-500 ml-1">(%)</span>
+                          </label>
+                          <input
+                            type="number"
+                            step="10"
+                            min="0"
+                            max="100"
+                            value={tradingConfig.partialTakeProfitR3}
+                            onChange={(e) =>
+                              setTradingConfig({ ...tradingConfig, partialTakeProfitR3: Math.min(100, Math.max(0, Number(e.target.value))) })
+                            }
+                            className="w-full bg-gray-700 rounded px-2 py-1 text-white text-sm"
+                          />
+                        </div>
+                      </div>
+                      <div className="text-xs text-gray-500 mt-2">
+                        说明：1R价格=止损距离×{strategyParams.riskRewardMultiplier1}倍，2R=×{strategyParams.riskRewardMultiplier2}倍，3R=×{strategyParams.riskRewardMultiplier3}倍
+                      </div>
+                    </div>
                   </div>
                 )}
                 {closeMode === 'simple' && (
