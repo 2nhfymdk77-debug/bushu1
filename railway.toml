@@ -1,32 +1,10 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "pnpm install && pnpm build"
 
 [deploy]
+startCommand = "pnpm run start"
 healthcheckPath = "/api/healthcheck"
-healthcheckTimeout = 300
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 10
 
-[[services]]
-name = "web"
-service_type = "web"
-source_dir = "/"
-
-[services.env]
+[env]
 NODE_ENV = "production"
-PORT = "3000"
-
-[[services.ports]]
-port = 3000
-type = "HTTP"
-force_https = true
-health_check = "/api/healthcheck"
-
-[[services.resources]]
-cpu = "0.5"
-memory = "512"
-
-[[scale]]
-min = 1
-max = 1
+PORT = "5000"

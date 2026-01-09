@@ -1,302 +1,362 @@
-# 币安期货自动交易系统
+# 云端自动交易系统
 
-基于 Next.js 16 的加密货币日内交易系统，支持策略回测和币安期货自动交易功能。
+一个基于 Next.js 的模块化加密货币自动交易系统，支持策略回测和真实交易，可部署在 Vercel、Railway 等云端平台。
 
-## ✨ 功能特性
+## ✨ 主要特性
 
-### 核心功能
-- ✅ **15分钟趋势过滤 + 5分钟回调进场**策略
-- ✅ 支持多合约同时监控
-- ✅ 分段止盈策略（1R平50%，2R全平）
-- ✅ 移动止损功能（达到1R后止损移动到保本价）
-- ✅ 实时K线数据推送（WebSocket）
-- ✅ 自动扫描热门合约
-- ✅ 支持1-125倍杠杆配置
-- ✅ 仅支持币安主网真实交易
+### 🔧 模块化架构
+- **交易所接口抽象**：统一接口设计，支持多交易所（当前实现币安）
+- **策略模块化**：策略独立开发，易于扩展新策略
+- **动态加载**：支持运行时选择和切换策略
 
-### 平台支持
-- 🌐 **Web 应用**：支持电脑、手机、平板访问
-- 📱 **响应式设计**：自动适配各种屏幕尺寸
-- 🎨 **深色主题**：保护视力，节省电量
-- ⚡ **实时数据**：WebSocket 实时推送交易信号
-- 🔒 **本地存储**：API 密钥存储在浏览器本地
+### 🧪 策略回测
+- **历史数据回测**：使用历史K线数据测试策略表现
+- **详细统计**：提供胜率、收益率、最大回撤等指标
+- **收益曲线**：可视化展示资金曲线和回撤情况
 
-## 🚀 快速部署
+### ⚡ 自动交易
+- **实时监控**：WebSocket实时接收市场数据
+- **信号执行**：自动执行策略生成的交易信号
+- **风控系统**：内置风险控制机制，支持止损止盈
 
-### 云端部署（推荐）
+### 📊 实时管理
+- **任务管理**：创建、启动、暂停、停止交易任务
+- **手动干预**：支持紧急停止、手动平仓、取消挂单等操作
+- **实时日志**：完整的交易日志和信号记录
 
-#### Vercel 部署（免费）
+### 💾 数据持久化
+- **PostgreSQL数据库**：使用Drizzle ORM管理数据
+- **配置存储**：安全存储API密钥和策略配置
+- **历史记录**：完整的交易历史和回测结果
 
-```bash
-# 1. 安装 Vercel CLI
-npm i -g vercel
+### 📱 多端支持
+- **响应式设计**：支持桌面端、平板、手机访问
+- **移动端优化**：底部导航栏，触摸友好界面
+- **深色主题**：专业的交易界面设计
 
-# 2. 登录并部署
-vercel login
-vercel --prod
+## 🏗️ 系统架构
+
+```
+├── src/
+│   ├── app/                    # Next.js App Router
+│   │   ├── api/               # API Routes
+│   │   │   └── binance/      # 币安API代理
+│   │   └── page.tsx           # 主页面
+│   ├── components/            # React组件
+│   │   ├── StrategySelector.tsx     # 策略选择组件
+│   │   ├── TradingMonitor.tsx       # 交易监控组件
+│   │   └── TradingRecords.tsx      # 交易记录组件
+│   ├── exchanges/             # 交易所实现
+│   │   └── BinanceExchange.ts      # 币安交易所
+│   ├── backtest/              # 回测引擎
+│   │   └── BacktestEngine.ts       # 回测引擎实现
+│   ├── execution/             # 交易执行引擎
+│   │   └── ExecutionEngine.ts      # 执行引擎实现
+│   ├── strategies/            # 策略实现
+│   │   └── EMA15mTrend5mPullbackStrategy.ts
+│   ├── types/                 # TypeScript类型定义
+│   │   ├── exchange.ts        # 交易所接口
+│   │   ├── strategy.ts        # 策略接口
+│   │   ├── backtest.ts        # 回测接口
+│   │   ├── execution.ts       # 执行接口
+│   │   └── database.ts        # 数据库模型
+│   ├── utils/                 # 工具函数
+│   │   └── strategyManager.ts      # 策略管理器
+│   └── storage/               # 数据存储
+│       └── database/
+│           ├── shared/schema.ts     # 数据库Schema
+│           └── tradingManager.ts   # 数据库Manager
+├── public/                    # 静态资源
+├── .coze                      # 项目配置
+├── vercel.json               # Vercel部署配置
+├── railway.toml              # Railway部署配置
+├── Dockerfile                # Docker配置
+└── package.json              # 依赖配置
 ```
 
-或者直接在 [vercel.com](https://vercel.com) 上导入 GitHub 仓库。
+## 🚀 快速开始
 
-详细步骤请查看 [云端部署指南](CLOUD_DEPLOYMENT_GUIDE.md)
+### 环境要求
+
+- Node.js 18+
+- pnpm
+- PostgreSQL 数据库
 
 ### 本地开发
 
-#### 1. 克隆项目
-
+1. **克隆项目**
 ```bash
-git clone <你的仓库地址>
-cd <项目目录>
+git clone <repository-url>
+cd <project-directory>
 ```
 
-#### 2. 安装依赖
-
+2. **安装依赖**
 ```bash
 pnpm install
 ```
 
-#### 3. 启动开发服务
-
+3. **配置环境变量**
 ```bash
-pnpm dev
+cp .env.example .env
+# 编辑 .env 文件，配置数据库连接和API密钥
 ```
 
-服务将运行在 `http://localhost:5000`
+4. **启动开发服务器**
+```bash
+pnpm run dev
+```
 
-#### 4. 访问应用
+5. **访问应用**
+打开浏览器访问 [http://localhost:5000](http://localhost:5000)
 
-在浏览器中打开 `http://localhost:5000`
+## 📦 云端部署
 
-## 💻 技术栈
+### Vercel 部署
 
-### 前端
-- **框架**: Next.js 16 (App Router)
-- **UI**: React 19 + Tailwind CSS 4
+1. **连接Git仓库**
+   - 登录 [Vercel](https://vercel.com)
+   - 点击 "New Project"
+   - 导入你的Git仓库
+
+2. **配置环境变量**
+   在 Vercel 项目设置中添加以下环境变量：
+   ```
+   PGDATABASE_URL=postgresql://...
+   ```
+
+3. **部署**
+   点击 "Deploy" 按钮，Vercel 会自动构建和部署
+
+4. **访问**
+   部署完成后，Vercel 会提供一个访问地址
+
+### Railway 部署
+
+1. **连接Git仓库**
+   - 登录 [Railway](https://railway.app)
+   - 点击 "New Project"
+   - 选择 "Deploy from GitHub repo"
+
+2. **配置环境变量**
+   在 Railway 项目设置中添加以下环境变量：
+   ```
+   PGDATABASE_URL=postgresql://...
+   ```
+
+3. **部署**
+   Railway 会自动检测配置并部署
+
+4. **访问**
+   部署完成后，Railway 会提供一个访问地址
+
+### Docker 部署
+
+1. **构建镜像**
+```bash
+docker build -t auto-trading-system .
+```
+
+2. **运行容器**
+```bash
+docker run -d \
+  -p 5000:5000 \
+  -e PGDATABASE_URL=postgresql://... \
+  --name auto-trading \
+  auto-trading-system
+```
+
+## 🎯 使用指南
+
+### 1. 配置API密钥
+
+首次使用需要配置币安API密钥：
+
+1. 进入"系统设置"页面
+2. 输入币安API Key和Secret
+3. 选择"主网"或"测试网"模式
+4. 保存配置
+
+**⚠️ 安全提示**：
+- API密钥加密存储在本地浏览器
+- 建议使用API权限受限的子账号
+- 建议设置IP白名单
+
+### 2. 策略回测
+
+1. 进入"策略回测"页面
+2. 选择交易策略（如"15分钟趋势+5分钟回调"）
+3. 配置策略参数
+4. 设置回测时间范围
+5. 点击"开始回测"
+6. 查看回测结果和统计
+
+### 3. 自动交易
+
+1. 进入"自动交易"页面
+2. 点击"新建任务"
+3. 选择策略和配置参数
+4. 设置交易对和时间周期
+5. 配置风控参数
+6. 启动任务
+
+### 4. 实时监控
+
+在"自动交易"页面可以：
+- 查看任务运行状态
+- 实时查看信号和日志
+- 手动干预（暂停、停止、平仓等）
+- 紧急停止所有任务
+
+### 5. 交易记录
+
+在"交易记录"页面可以：
+- 查看历史交易
+- 分析收益统计
+- 导出交易数据
+
+## 🔒 安全建议
+
+### API密钥管理
+- ✅ 使用独立的API密钥
+- ✅ 设置IP白名单
+- ✅ 限制API权限（不要开启提现权限）
+- ✅ 定期更换API密钥
+- ❌ 不要在公共设备上保存密钥
+- ❌ 不要分享API密钥
+
+### 资金管理
+- ✅ 使用小额资金测试
+- ✅ 设置止损止盈
+- ✅ 控制仓位大小
+- ❌ 不要使用全部资金
+- ❌ 不要在高杠杆下操作
+
+### 风险控制
+- ✅ 设置最大回撤限制
+- ✅ 设置每日最大交易次数
+- ✅ 监控任务运行状态
+- ❌ 不要24小时无人值守运行
+- ❌ 不要在市场异常时运行
+
+## 📚 开发指南
+
+### 添加新策略
+
+1. **创建策略类**
+```typescript
+// src/strategies/MyNewStrategy.ts
+import {
+  TradingStrategy,
+  StrategyMeta,
+  SignalDetectionResult,
+  KLineData,
+} from "../types/strategy";
+
+export class MyNewStrategy implements TradingStrategy {
+  readonly meta: StrategyMeta = {
+    id: "my_new_strategy",
+    name: "我的新策略",
+    description: "策略描述",
+    version: "1.0.0",
+    category: "趋势跟踪",
+    timeframe: ["15m", "30m"],
+    riskLevel: "medium",
+  };
+
+  getDefaultParams() {
+    return { /* 默认参数 */ };
+  }
+
+  getConfigItems() {
+    return [ /* 配置项 */ ];
+  }
+
+  detectSignal(symbol: string, klines: KLineData[], params: any): SignalDetectionResult {
+    // 实现信号检测逻辑
+  }
+}
+```
+
+2. **注册策略**
+```typescript
+// src/utils/strategyManager.ts
+import { MyNewStrategy } from "../strategies/MyNewStrategy";
+
+// 在构造函数中注册
+this.registerStrategy(new MyNewStrategy());
+```
+
+### 添加新交易所
+
+1. **实现Exchange接口**
+```typescript
+// src/exchanges/NewExchange.ts
+import { Exchange } from "../types/exchange";
+
+export class NewExchange implements Exchange {
+  // 实现所有接口方法
+}
+```
+
+2. **在执行引擎中使用**
+```typescript
+import { NewExchange } from "../exchanges/NewExchange";
+
+const exchange = new NewExchange(apiKey, apiSecret);
+const engine = new BinanceExecutionEngine({ exchange, ... });
+```
+
+## 📊 数据库结构
+
+### 主要表
+
+- **user_configs**: 用户配置（API密钥等）
+- **trade_tasks**: 交易任务
+- **signal_execution_records**: 信号执行记录
+- **backtest_results**: 回测结果
+- **manual_interventions**: 手动干预记录
+- **trading_logs**: 交易日志
+- **system_stats**: 系统统计
+
+详细结构请参考 `src/storage/database/shared/schema.ts`
+
+## 🛠️ 技术栈
+
+- **前端**: Next.js 16, React 19, TypeScript 5, Tailwind CSS 4
+- **后端**: Next.js API Routes
+- **数据库**: PostgreSQL + Drizzle ORM
+- **交易所**: Binance Futures API
 - **图表**: Lightweight Charts 4.1.1
-- **语言**: TypeScript 5
-
-### 后端
-- **API**: Next.js API Routes
-- **通信**: WebSocket
-- **集成**: Binance Futures API (Mainnet)
-
-### 部署
-- **平台**: Vercel / Railway / Docker
-- **协议**: HTTPS 自动配置
-- **CDN**: 全球节点加速
-
-## 📱 多端使用
-
-### 电脑端
-- 使用 Chrome、Edge、Firefox 等现代浏览器
-- 访问应用 URL
-
-### 手机端
-- 在手机浏览器访问应用 URL
-- 支持触摸操作
-- 推荐添加到主屏幕使用（像原生应用）
-
-详细说明请查看 [移动端使用指南](MOBILE_USER_GUIDE.md)
-
-## 📖 使用说明
-
-### 第一步：连接币安账户
-
-1. 在登录页面输入币安 API Key 和 API Secret
-2. 点击"连接币安账户"
-3. 系统会验证 API 密钥的有效性
-
-**重要提示**：
-- ✅ API 密钥仅存储在浏览器 localStorage，不会上传到服务器
-- ✅ 每个用户需配置自己的 API 密钥
-- ⚠️ 确保你的 API 密钥有期货交易权限
-- ⚠️ 建议在币安 API 设置中限制 IP 白名单
-
-### 第二步：选择交易策略
-
-系统内置了策略管理器，支持多种策略：
-
-1. **15分钟趋势 + 5分钟回调**（默认）
-   - 适合趋势跟踪交易
-   - 自动识别趋势方向
-   - 等待回调入场
-
-未来可扩展更多策略...
-
-### 第三步：配置交易参数
-
-#### 策略参数
-- **EMA Short**: 短周期均线（默认20）
-- **EMA Long**: 长周期均线（默认60）
-- **RSI Period**: RSI周期（默认14）
-- **Volume Period**: 成交量均线周期（默认20）
-- **最小趋势距离**: EMA之间的最小距离百分比（默认0.15%）
-
-#### 交易配置
-- **杠杆**: 交易杠杆倍数（1-125倍，默认3倍）
-- **止损比例**: 止损距离百分比（默认0.5%）
-- **止盈比例**: 简单止盈比例（默认1.5%）
-- **仓位大小**: 每次交易使用账户资金的百分比（默认10%）
-- **最大持仓数**: 同时持有的最大合约数量（默认5个）
-- **每日交易限制**: 每日最大交易次数（默认10笔）
-
-#### 平仓策略
-- **分段止盈**: 1R平50%，2R全平（推荐）
-- **移动止损**: 达到1R后移动止损价格
-- **移动到保本价**: 达到1R后止损移到入场价
-- **反向信号平仓**: 出现反向信号时自动平仓
-
-### 第四步：开始监控
-
-1. 在"选择监控合约"区域勾选要监控的合约
-2. 点击"开始监控"按钮
-3. 系统会连接 WebSocket 并开始接收实时数据
-4. 在"实时交易信号"区域查看检测到的信号
-
-### 第五步：开启自动交易（可选）
-
-⚠️ **警告：自动交易会使用真实资金，请谨慎使用！**
-
-1. 勾选"自动交易"复选框
-2. 系统会弹出警告对话框，确认后开启
-3. 开启后，系统会自动执行符合条件的交易
-
-#### 自动扫描功能
-
-1. 勾选"自动扫描所有合约"开关
-2. 系统会每5分钟自动扫描热门合约
-3. 也可以点击"立即扫描"按钮手动触发
-4. 在"扫描日志"区域查看扫描进度和结果
-
-## 📊 策略说明
-
-### 15分钟趋势过滤
-
-系统首先在15分钟K线图上判断趋势方向：
-- **多头条件**：EMA20 > EMA60，当前价格 > EMA20，成交量 > 平均成交量
-- **空头条件**：EMA20 < EMA60，当前价格 < EMA20，成交量 > 平均成交量
-- **趋势距离**：EMA20 和 EMA60 之间的距离必须超过 `最小趋势距离`
-
-### 5分钟回调进场
-
-在确认趋势方向后，在5分钟K线图上寻找进场点：
-- **做多进场**：价格回踩EMA20或EMA60后重新站上，且RSI上升
-- **做空进场**：价格反弹EMA20或EMA60后重新跌破，且RSI下降
-
-### 分段止盈策略
-
-- **1R（第一止盈位）**：平50%仓位
-- **2R（第二止盈位）**：平剩余50%仓位
-- **R值说明**：1R = 止损距离（如止损0.5%，1R = 价格移动0.5%）
-
-### 移动止损策略
-
-- 达到1R后，止损价格开始随价格移动
-- 开启"移动到保本价"后，止损会移动到入场价
-- 锁定已实现的利润，防止回撤过大
-
-## ⚠️ 风险提示
-
-1. ⚠️ 本系统仅支持币安主网真实交易，不提供测试网或模拟交易
-2. ⚠️ 自动交易会使用真实资金，请务必先在手动模式下测试
-3. ⚠️ 数字货币交易存在高风险，请根据自己的风险承受能力使用
-4. ⚠️ 建议使用较小的仓位和杠杆开始测试
-5. ⚠️ 请妥善保管你的 API 密钥，不要泄露给他人
-6. ⚠️ 系统不保证盈利，仅供学习和研究使用
-
-## 🛠️ 项目结构
-
-```
-.
-├── src/
-│   ├── app/                      # Next.js App Router
-│   │   ├── api/                  # API Routes
-│   │   │   └── binance/          # 币安 API 集成
-│   │   ├── layout.tsx            # 根布局
-│   │   ├── page.tsx              # 主页面
-│   │   └── globals.css           # 全局样式
-│   ├── components/               # React 组件
-│   │   ├── BinanceAutoTrader.tsx # 自动交易主组件
-│   │   ├── CryptoBacktestTool.tsx # 回测工具
-│   │   ├── StrategySelector.tsx  # 策略选择器
-│   │   └── CandlestickChart.tsx  # K线图表
-│   ├── strategies/               # 交易策略
-│   │   └── EMA15mTrend5mPullbackStrategy.ts
-│   ├── types/                    # TypeScript 类型定义
-│   │   └── strategy.ts
-│   └── utils/                    # 工具函数
-│       └── strategyManager.ts    # 策略管理器
-├── package.json                  # 项目配置
-├── tsconfig.json                 # TypeScript 配置
-├── next.config.ts                # Next.js 配置
-├── vercel.json                   # Vercel 部署配置
-├── railway.toml                  # Railway 部署配置
-└── README.md                     # 项目说明
-```
-
-## ❓ 常见问题
-
-### Q1: API 签名验证错误(-1022)
-
-**解决方法**：
-1. 检查 API Key 和 Secret 是否正确（不要有多余空格）
-2. 确认系统时间是否准确
-3. 在币安 API 设置中限制 IP 白名单
-4. 重新生成 API 密钥
-
-详细说明请查看 [API 错误排查](API_400_ERROR_TROUBLESHOOTING.md)
-
-### Q2: 信号不显示
-
-**解决方法**：
-1. 确认 WebSocket 连接是否正常（查看浏览器控制台）
-2. 检查是否已选择监控合约
-3. 确认策略参数设置合理
-4. 查看"扫描日志"了解信号检测的详细原因
-
-### Q3: 自动扫描卡死
-
-**解决方法**：
-1. 点击"立即扫描"按钮手动触发
-2. 查看扫描日志了解具体原因
-3. 检查网络连接是否正常
-4. 减少监控的合约数量
-
-### Q4: 移动端无法访问
-
-**解决方法**：
-1. 确保使用 HTTPS 访问
-2. 使用现代浏览器（Chrome、Safari）
-3. 清除浏览器缓存
-4. 查看移动端使用指南
-
-## 📚 文档
-
-- [云端部署指南](CLOUD_DEPLOYMENT_GUIDE.md) - Vercel/Railway/Docker 部署
-- [移动端使用指南](MOBILE_USER_GUIDE.md) - 手机/平板使用说明
-- [币安交易指南](BINANCE_TRADING_GUIDE.md) - 交易功能详解
-- [自动交易测试指南](AUTO_TRADING_TEST_GUIDE.md) - 测试步骤
-- [API 错误排查](API_400_ERROR_TROUBLESHOOTING.md) - 常见 API 问题
-
-## 🔗 相关链接
-
-- [Next.js 文档](https://nextjs.org/docs)
-- [币安 API 文档](https://binance-docs.github.io/apidocs/futures/cn/)
-- [React 文档](https://react.dev)
-- [Tailwind CSS](https://tailwindcss.com)
+- **部署**: Vercel / Railway / Docker
 
 ## 📄 许可证
 
 MIT License
 
+## ⚠️ 免责声明
+
+本系统仅供学习和研究使用。加密货币交易存在高风险，可能导致资金损失。使用本系统进行实际交易时，请务必：
+
+- 充分理解系统运作原理
+- 在测试环境充分测试
+- 使用小额资金
+- 做好风险控制
+- 自行承担所有交易风险
+
+开发者不对使用本系统造成的任何损失负责。
+
 ## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！
 
-## 📞 技术支持
+## 📮 联系方式
 
-如有问题，请在 GitHub 上提交 Issue。
+如有问题或建议，请通过以下方式联系：
+
+- 提交 Issue
+- 发送邮件
+- 加入讨论群
 
 ---
 
-**⚠️ 重要提示**：本系统仅供学习和研究使用，数字货币交易存在高风险，请谨慎投资！
+**祝您交易顺利！** 🎉

@@ -1,30 +1,29 @@
 {
-  "version": 2,
-  "name": "binance-auto-trader",
-  "builds": [
-    {
-      "src": "package.json",
-      "use": "@vercel/next"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "/$1"
-    }
-  ],
+  "buildCommand": "pnpm run build",
+  "devCommand": "pnpm run dev",
+  "installCommand": "pnpm install",
+  "framework": "nextjs",
+  "regions": ["hkg1", "sin1", "nrt1"],
   "env": {
-    "NEXT_PUBLIC_APP_URL": "https://your-app.vercel.app"
+    "NEXT_TELEMETRY_DISABLED": "1"
   },
-  "regions": ["hkg1", "sfo1"],
-  "build": {
-    "env": {
-      "NEXT_PUBLIC_APP_URL": "https://your-app.vercel.app"
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "X-XSS-Protection",
+          "value": "1; mode=block"
+        }
+      ]
     }
-  },
-  "functions": {
-    "app/api/**": {
-      "maxDuration": 30
-    }
-  }
+  ]
 }
